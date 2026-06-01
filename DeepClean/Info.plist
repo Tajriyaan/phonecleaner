@@ -33,17 +33,6 @@
 	<key>NSContactsUsageDescription</key>
 	<string>DeepClean needs access to your contacts to find and merge duplicates.</string>
 
-	<!-- Background processing: allows scan to complete when charging + idle -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>processing</string>
-		<string>fetch</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.deepclean.app.scan</string>
-	</array>
-
 	<!-- URL schemes -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
