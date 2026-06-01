@@ -14,7 +14,7 @@ import UIKit
 actor VisionAnalyzer {
 
     private let imageManager = PHImageManager.default()
-    private let analysisSize = CGSize(width: 512, height: 512)
+    private let analysisSize = CGSize(width: 256, height: 256)  // 4x fewer pixels, same accuracy
 
     // MARK: - Vision Result
 

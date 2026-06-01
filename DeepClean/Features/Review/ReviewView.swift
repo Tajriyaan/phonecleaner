@@ -78,6 +78,7 @@ struct ReviewView: View {
                         confidenceSection(tier: tier, groups: groups)
                     }
                 }
+                .id(result.groups.count) // force list refresh when groups change
 
                 Spacer(minLength: 100)
             }
@@ -130,8 +131,10 @@ struct ReviewView: View {
                     .foregroundColor(Theme.Colors.textTertiary)
             }
 
-            ForEach(groups) { group in
-                groupRow(group: group)
+            LazyVStack(spacing: Theme.Spacing.sm) {
+                ForEach(groups) { group in
+                    groupRow(group: group)
+                }
             }
         }
     }

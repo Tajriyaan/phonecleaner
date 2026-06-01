@@ -132,15 +132,22 @@ final class ScanEngine: ObservableObject {
             // Publishes updated groups every 50 photos.
             scanState.update(phase: .visionAnalysis, processed: 0, total: assets.count)
             var visionResults: [String: VisionAnalyzer.VisionResult] = [:]
-            let batchSize = 8
+            // Larger batch = fewer task group overhead cycles. 256x256 images use
+            // far less RAM than 512x512, so we can safely process 16 at once.
+            let batchSize = 16
             var processed = 0
 
             for batchStart in stride(from: 0, to: assets.count, by: batchSize) {
                 guard !Task.isCancelled else { return }
                 let batch = Array(assets[batchStart..<min(batchStart + batchSize, assets.count)])
 
+                // Skip tiny assets (< 200px) — likely icons/thumbnails, not real photos
+                let realPhotos = batch.filter {
+                    $0.phAsset.pixelWidth >= 200 || $0.phAsset.pixelHeight >= 200
+                }
+
                 await withTaskGroup(of: (String, VisionAnalyzer.VisionResult).self) { group in
-                    for asset in batch {
+                    for asset in realPhotos {
                         group.addTask {
                             let vr = await self.visionAnalyzer.analyse(asset: asset.phAsset)
                             return (asset.id, vr)
@@ -156,7 +163,7 @@ final class ScanEngine: ObservableObject {
                     }
                 }
 
-                // Apply Vision + quality scores, release memory
+                // Apply Vision + quality, release batch memory immediately
                 for asset in batch {
                     if let vr = visionResults[asset.id] {
                         asset.featurePrint    = vr.featurePrint
@@ -168,34 +175,26 @@ final class ScanEngine: ObservableObject {
                     }
                 }
                 for asset in batch { visionResults.removeValue(forKey: asset.id) }
-
-                // Publish updated results every 200 photos (not too frequent — clustering is expensive)
-                if processed % 200 == 0 || batchStart + batchSize >= assets.count {
-                    let updatedDupes = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
-                    scanResult.groups = updatedDupes
-                    scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
-                    result = scanResult                  // ← LIVE UPDATE
-                }
+                // No mid-scan re-clustering — O(n²) clustering runs ONCE at the end
             }
             guard !Task.isCancelled else { return }
 
-            // ── 5. PHASE 3: Video analysis ───────────────────────────────────
-            scanState.update(phase: .videoAnalysis, processed: 0, total: 0)
-            let videoAssets = allPHAssets.filter { $0.mediaType == .video }
-            if !videoAssets.isEmpty {
-                let videoGroups = await buildVideoGroups(videoAssets: videoAssets)
-                scanResult.groups.append(contentsOf: videoGroups)
-                result = scanResult                      // ← PUBLISH video results
-            }
-            guard !Task.isCancelled else { return }
+            // ── 5. Final clustering (runs ONCE with full Vision data) ────────
+            scanState.update(phase: .clustering)
+            let finalDuplicates = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
 
-            // ── 6. PHASE 4: Junk detection (final pass with full quality data) ─
+            // ── 6. Junk detection ────────────────────────────────────────────
             scanState.update(phase: .junkDetection)
             let finalJunk = junkGrouper.group(assets: photoAssets)
 
-            // ── 7. Final clustering with all Vision data ─────────────────────
-            scanState.update(phase: .clustering)
-            let finalDuplicates = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
+            // ── 7. Video analysis ────────────────────────────────────────────
+            scanState.update(phase: .videoAnalysis, processed: 0, total: 0)
+            var videoGroups: [MediaGroup] = []
+            let videoAssets = allPHAssets.filter { $0.mediaType == .video }
+            if !videoAssets.isEmpty {
+                videoGroups = await buildVideoGroups(videoAssets: videoAssets)
+            }
+            guard !Task.isCancelled else { return }
 
             // ── 8. iCloud stats ──────────────────────────────────────────────
             scanState.update(phase: .icloudCheck)
@@ -204,17 +203,7 @@ final class ScanEngine: ObservableObject {
 
             // ── 9. Finalise ──────────────────────────────────────────────────
             scanState.update(phase: .finalising)
-            scanResult.groups = finalDuplicates + finalJunk
-            if !videoAssets.isEmpty {
-                let videoGroups = scanResult.groups.filter {
-                    if case .junk(let j) = $0.groupType {
-                        return j == .accidentalShot || j == .screenRecording
-                    }
-                    if case .duplicates(let d) = $0.groupType { return d == .nearDuplicate }
-                    return false
-                }
-                scanResult.groups = finalDuplicates + finalJunk + videoGroups
-            }
+            scanResult.groups = finalDuplicates + finalJunk + videoGroups
             scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
             scanResult.scanDuration = Date().timeIntervalSince(start)
 
