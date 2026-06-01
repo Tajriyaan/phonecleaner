@@ -1,0 +1,27 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# CocoaPods (not used but just in case)
+Pods/
+Podfile.lock
+
+# Secrets — never commit these
+*.p12
+*.mobileprovision
+ExportOptions.plist

@@ -1,0 +1,59 @@
+name: Build DeepClean IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: macos-14   # Apple Silicon runner — fastest, free on GitHub Actions
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install dependencies (none currently)
+        run: echo "No external dependencies"
+
+      - name: Build (unsigned, for AltStore sideloading)
+        run: |
+          xcodebuild \
+            -project DeepClean/DeepClean.xcodeproj \
+            -scheme DeepClean \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/DeepClean.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Export IPA (unsigned)
+        run: |
+          mkdir -p build/Payload
+          cp -r build/DeepClean.xcarchive/Products/Applications/DeepClean.app \
+                build/Payload/DeepClean.app
+          cd build && zip -r DeepClean.ipa Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepClean-IPA
+          path: build/DeepClean.ipa
+          retention-days: 14
+
+  # Optional: send a notification when build is ready
+  notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Build complete
+        run: echo "DeepClean IPA is ready. Download from the Actions artifacts tab."
