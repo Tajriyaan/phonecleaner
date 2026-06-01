@@ -231,15 +231,26 @@ struct DashboardView: View {
     }
 
     private var reviewButton: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Image(systemName: "checkmark.circle.fill")
-            Text("Review & Clean").font(Theme.Typography.headline)
+        VStack(spacing: Theme.Spacing.sm) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "checkmark.circle.fill")
+                Text("Review & Clean").font(Theme.Typography.headline)
+            }
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(Theme.Spacing.md)
+            .background(Theme.Gradients.accent)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+
+            Button {
+                ScanPersistence.shared.clear()
+                showingScanView = true
+            } label: {
+                Text("Rescan Library")
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.textTertiary)
+            }
         }
-        .foregroundColor(.white)
-        .frame(maxWidth: .infinity)
-        .padding(Theme.Spacing.md)
-        .background(Theme.Gradients.accent)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
     }
 
     // MARK: - Storage

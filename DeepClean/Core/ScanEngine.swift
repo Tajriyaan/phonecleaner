@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import Vision
+import UIKit
 
 // MARK: - Scan Engine
 
@@ -19,16 +20,32 @@ final class ScanEngine: ObservableObject {
     private let junkGrouper     = JunkGrouper()
 
     private var scanTask: Task<Void, Never>?
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    // MARK: - Init: load cached result immediately
+
+    init() {
+        if let cached = ScanPersistence.shared.load() {
+            result = cached
+        }
+    }
 
     // MARK: - Control
 
     func startScan() {
         guard !isScanning else { return }
         isScanning = true
-        // Explicit @MainActor ensures performScan() always runs on the main actor
-        // regardless of how iOS 26 handles unstructured Task inheritance
+        // Request background execution time so scan survives app switching
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "DeepClean Scan") {
+            // Expiry handler — save whatever we have so far
+            self.scanTask?.cancel()
+            UIApplication.shared.endBackgroundTask(self.backgroundTaskID)
+            self.backgroundTaskID = .invalid
+        }
         scanTask = Task { @MainActor in
             await self.performScan()
+            UIApplication.shared.endBackgroundTask(self.backgroundTaskID)
+            self.backgroundTaskID = .invalid
         }
     }
 
@@ -37,6 +54,10 @@ final class ScanEngine: ObservableObject {
         scanTask = nil
         isScanning = false
         scanState.phase = .idle
+        if backgroundTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
     }
 
     // MARK: - Main Pipeline
@@ -78,61 +99,49 @@ final class ScanEngine: ObservableObject {
             )
             guard !Task.isCancelled else { return }
 
-            // 4. Vision analysis (feature prints + aesthetics + classifications)
+            // 4 + 5. Vision analysis + quality scoring — batched to prevent OOM crash.
+            // Running all photos concurrently exhausts RAM on large libraries.
+            // Process in batches of 8: each batch loads thumbnails, runs Vision,
+            // scores quality, then releases memory before the next batch.
             scanState.update(phase: .visionAnalysis, processed: 0, total: assets.count)
             var visionResults: [String: VisionAnalyzer.VisionResult] = [:]
-            await withTaskGroup(of: (String, VisionAnalyzer.VisionResult).self) { group in
-                for asset in assets {
-                    group.addTask {
-                        let vr = await self.visionAnalyzer.analyse(asset: asset.phAsset)
-                        return (asset.id, vr)
+            let batchSize = 8
+            var processed = 0
+
+            for batchStart in stride(from: 0, to: assets.count, by: batchSize) {
+                guard !Task.isCancelled else { return }
+                let batch = Array(assets[batchStart..<min(batchStart + batchSize, assets.count)])
+
+                // Vision pass for this batch
+                await withTaskGroup(of: (String, VisionAnalyzer.VisionResult).self) { group in
+                    for asset in batch {
+                        group.addTask {
+                            let vr = await self.visionAnalyzer.analyse(asset: asset.phAsset)
+                            return (asset.id, vr)
+                        }
                     }
-                }
-                var processed = 0
-                for await (id, vr) in group {
-                    visionResults[id] = vr
-                    processed += 1
-                    if processed % 20 == 0 {
+                    for await (id, vr) in group {
+                        visionResults[id] = vr
+                        processed += 1
                         let p = processed, t = assets.count
-                        await MainActor.run { scanState.update(phase: .visionAnalysis, processed: p, total: t) }
+                        await MainActor.run { self.scanState.update(phase: .visionAnalysis, processed: p, total: t) }
                     }
                 }
-            }
 
-            // Apply vision results to assets
-            for asset in assets {
-                if let vr = visionResults[asset.id] {
-                    asset.featurePrint    = vr.featurePrint
-                    asset.classifications = vr.classifications
-                    asset.detectedText    = vr.hasText
-                    asset.faceCount       = vr.faceCount
-                }
-            }
-            guard !Task.isCancelled else { return }
-
-            // 5. Quality scoring (uses vision results already stored on asset)
-            scanState.update(phase: .qualityScoring, processed: 0, total: assets.count)
-            await withTaskGroup(of: (String, QualityScore).self) { group in
-                for asset in assets {
-                    let vr = visionResults[asset.id] ?? VisionAnalyzer.VisionResult()
-                    group.addTask {
-                        let score = await self.qualityAnalyzer.score(asset: asset.phAsset,
-                                                                     visionResult: vr)
-                        return (asset.id, score)
+                // Apply vision + quality score immediately for this batch, then release
+                for asset in batch {
+                    if let vr = visionResults[asset.id] {
+                        asset.featurePrint    = vr.featurePrint
+                        asset.classifications = vr.classifications
+                        asset.detectedText    = vr.hasText
+                        asset.faceCount       = vr.faceCount
+                        asset.qualityScore    = await qualityAnalyzer.score(
+                            asset: asset.phAsset, visionResult: vr)
                     }
                 }
-                var processed = 0
-                for await (id, score) in group {
-                    assets.first { $0.id == id }?.qualityScore = score
-                    processed += 1
-                    if processed % 50 == 0 {
-                        let p = processed, t = assets.count
-                        await MainActor.run { scanState.update(phase: .qualityScoring, processed: p, total: t) }
-                    }
-                }
+                // Release batch thumbnails from memory
+                for asset in batch { visionResults.removeValue(forKey: asset.id) }
             }
-            guard !Task.isCancelled else { return }
-
             // 6. Video analysis
             let videoAssets = allPHAssets.filter { $0.mediaType == .video }
             if !videoAssets.isEmpty {
@@ -166,6 +175,8 @@ final class ScanEngine: ObservableObject {
             scanState.phase = .complete
             result = scanResult
             isScanning = false
+            // Persist so next launch loads instantly without rescanning
+            ScanPersistence.shared.save(scanResult)
 
         } catch {
             scanState.phase = .failed
