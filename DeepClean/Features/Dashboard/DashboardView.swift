@@ -1,11 +1,14 @@
 import SwiftUI
 import Photos
+import UIKit
 
 struct DashboardView: View {
     @EnvironmentObject var scanEngine: ScanEngine
     @State private var showingScanView = false
     @State private var showingReview = false
     @State private var deviceStorage: (used: Double, total: Double) = (0, 0)
+    @State private var permissionError: String?
+    @State private var showingPermissionAlert = false
 
     var body: some View {
         NavigationStack {
@@ -40,7 +43,17 @@ struct DashboardView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .onAppear { loadDeviceStorage() }
+            .onAppear { loadDeviceStorage(); checkPhotoPermission() }
+            .alert("Photos Access Required", isPresented: $showingPermissionAlert) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(permissionError ?? "Please allow Full Access to Photos in Settings → Privacy & Security → Photos → DeepClean")
+            }
             .sheet(isPresented: $showingScanView) {
                 ScanProgressView()
                     .environmentObject(scanEngine)
@@ -198,8 +211,22 @@ struct DashboardView: View {
         .padding(Theme.Spacing.xl)
     }
 
+    private func checkPhotoPermission() {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if status == .denied || status == .restricted {
+            permissionError = "DeepClean needs Full Access to Photos. Go to Settings → Privacy & Security → Photos → DeepClean → Full Access."
+            showingPermissionAlert = true
+        }
+    }
+
     private var scanButton: some View {
         Button {
+            let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if status == .denied || status == .restricted {
+                permissionError = "Please allow Full Access to Photos in Settings → Privacy & Security → Photos → DeepClean."
+                showingPermissionAlert = true
+                return
+            }
             showingScanView = true
             scanEngine.startScan()
         } label: {
