@@ -156,43 +156,121 @@ struct DuplicateClusterer {
 }
 
 // MARK: - Junk Grouper
+// Uses PHAsset metadata subtypes (instant, no image loading) + Vision quality scores.
 
 struct JunkGrouper {
 
     func group(assets: [MediaAsset]) -> [MediaGroup] {
         var groups: [MediaGroup] = []
+        var usedIDs = Set<String>()
 
-        let screenshots = assets.filter { $0.qualityScore?.isUtility == true }
-        if !screenshots.isEmpty {
-            groups.append(make(.junk(.screenshot), assets: screenshots, confidence: .reviewRecommended))
-        }
+        // ── Metadata-based categories (instant, no image loading needed) ──
 
-        let blurry = assets.filter { $0.qualityScore?.hasBlur == true && $0.qualityScore?.isUtility != true }
-        if !blurry.isEmpty {
-            groups.append(make(.junk(.blurry), assets: blurry, confidence: .safeToDelete))
+        // Screenshots — use system subtype flag (most accurate)
+        let screenshots = assets.filter {
+            $0.phAsset.mediaSubtypes.contains(.photoScreenshot) ||
+            $0.qualityScore?.isUtility == true
         }
+        add(&groups, type: .screenshot, assets: screenshots, usedIDs: &usedIDs)
 
-        let junk = assets.filter {
-            $0.qualityScore?.isJunkShot == true && $0.qualityScore?.hasBlur != true
+        // Screen recordings — filename pattern (RPReplay_*)
+        let screenRecs = assets.filter {
+            $0.phAsset.mediaType == .video &&
+            PHAssetResource.assetResources(for: $0.phAsset).contains {
+                $0.originalFilename.lowercased().hasPrefix("rpreplay_")
+            }
         }
-        if !junk.isEmpty {
-            groups.append(make(.junk(.accidentalShot), assets: junk, confidence: .safeToDelete))
-        }
+        add(&groups, type: .screenRecording, assets: screenRecs, usedIDs: &usedIDs)
 
+        // Panoramas
+        let panoramas = assets.filter { $0.phAsset.mediaSubtypes.contains(.photoPanorama) }
+        add(&groups, type: .panorama, assets: panoramas, usedIDs: &usedIDs)
+
+        // Slow-motion
+        let slowmo = assets.filter { $0.phAsset.mediaSubtypes.contains(.videoHighFrameRate) }
+        add(&groups, type: .slowMotion, assets: slowmo, usedIDs: &usedIDs)
+
+        // Time-lapse
+        let timelapse = assets.filter { $0.phAsset.mediaSubtypes.contains(.videoTimeLapse) }
+        add(&groups, type: .timeLapse, assets: timelapse, usedIDs: &usedIDs)
+
+        // Live Photo video clips (the .mov component saved separately)
+        let liveClips = assets.filter {
+            $0.phAsset.mediaType == .video &&
+            $0.phAsset.duration < 4.0 &&
+            !usedIDs.contains($0.id)
+        }.filter { asset in
+            PHAssetResource.assetResources(for: asset.phAsset).contains {
+                $0.type == .pairedVideo
+            }
+        }
+        add(&groups, type: .livePhotoVideo, assets: liveClips, usedIDs: &usedIDs)
+
+        // Saved from Messages (album name detection)
+        let fromMessages = assets.filter {
+            !usedIDs.contains($0.id) &&
+            $0.sourceAlbums.contains {
+                let name = $0.lowercased()
+                return name.contains("message") || name.contains("whatsapp") ||
+                       name.contains("telegram") || name.contains("signal")
+            }
+        }
+        add(&groups, type: .savedFromMessages, assets: fromMessages, usedIDs: &usedIDs)
+
+        // Saved from web / downloads (album name detection)
+        let fromWeb = assets.filter {
+            !usedIDs.contains($0.id) &&
+            $0.sourceAlbums.contains {
+                let name = $0.lowercased()
+                return name.contains("download") || name.contains("saved") ||
+                       name.contains("instagram") || name.contains("twitter") ||
+                       name.contains("tiktok") || name.contains("facebook")
+            }
+        }
+        add(&groups, type: .savedFromWeb, assets: fromWeb, usedIDs: &usedIDs)
+
+        // ── Vision/quality-based categories ─────────────────────────────────
+
+        // Blurry photos
+        let blurry = assets.filter {
+            !usedIDs.contains($0.id) &&
+            $0.phAsset.mediaType == .image &&
+            $0.qualityScore?.hasBlur == true
+        }
+        add(&groups, type: .blurry, assets: blurry, usedIDs: &usedIDs)
+
+        // Accidental shots (junk shots detected by Vision)
+        let accidental = assets.filter {
+            !usedIDs.contains($0.id) &&
+            $0.phAsset.mediaType == .image &&
+            $0.qualityScore?.isJunkShot == true
+        }
+        add(&groups, type: .accidentalShot, assets: accidental, usedIDs: &usedIDs)
+
+        // Bad exposure
         let badExposure = assets.filter {
-            guard let q = $0.qualityScore else { return false }
+            guard !usedIDs.contains($0.id), $0.phAsset.mediaType == .image,
+                  let q = $0.qualityScore else { return false }
             return q.exposure < 0.2 && !q.hasBlur && !q.isUtility && !q.isJunkShot
         }
-        if !badExposure.isEmpty {
-            groups.append(make(.junk(.badExposure), assets: badExposure, confidence: .reviewRecommended))
-        }
+        add(&groups, type: .badExposure, assets: badExposure, usedIDs: &usedIDs)
 
         return groups.sorted { $0.estimatedSizeMB > $1.estimatedSizeMB }
     }
 
-    private func make(_ type: MediaGroup.GroupType, assets: [MediaAsset],
-                      confidence: GroupConfidence) -> MediaGroup {
-        MediaGroup(groupType: type, assets: assets, confidence: confidence, estimatedSizeMB: sizeMB(assets))
+    private mutating func add(_ groups: inout [MediaGroup],
+                               type: JunkType,
+                               assets: [MediaAsset],
+                               usedIDs: inout Set<String>) {
+        let fresh = assets.filter { !usedIDs.contains($0.id) }
+        guard !fresh.isEmpty else { return }
+        fresh.forEach { usedIDs.insert($0.id) }
+        groups.append(MediaGroup(
+            groupType: .junk(type),
+            assets: fresh,
+            confidence: type.confidence,
+            estimatedSizeMB: sizeMB(fresh)
+        ))
     }
 
     private func sizeMB(_ assets: [MediaAsset]) -> Double {

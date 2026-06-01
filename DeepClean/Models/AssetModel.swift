@@ -81,20 +81,34 @@ enum SimilarityType: String, CaseIterable {
 // MARK: - Junk Type
 
 enum JunkType: String, CaseIterable {
-    case blurry         = "Blurry Photo"
-    case badExposure    = "Bad Exposure"
-    case accidentalShot = "Accidental Shot"
-    case bodyPartShot   = "Body Part Shot"
-    case screenshot     = "Screenshot"
-    case screenRecording = "Screen Recording"
-    case lowQuality     = "Low Quality"
-    case receipt        = "Receipt / Document"
+    // Quality issues
+    case blurry          = "Blurry Photos"
+    case badExposure     = "Bad Exposure"
+    case lowQuality      = "Low Quality"
+    case accidentalShot  = "Accidental Shots"
+
+    // System-detected types
+    case screenshot      = "Screenshots"
+    case screenRecording = "Screen Recordings"
+    case panorama        = "Panoramas"
+    case slowMotion      = "Slow-Motion Videos"
+    case timeLapse       = "Time-Lapse Videos"
+    case livePhotoVideo  = "Live Photo Clips"
+
+    // Source-based
+    case savedFromMessages = "Saved from Messages"
+    case savedFromWeb      = "Downloaded / Saved from Web"
+
+    // Document types (keep recommended)
+    case receipt         = "Receipts & Documents"
 
     var confidence: GroupConfidence {
         switch self {
-        case .blurry, .accidentalShot, .bodyPartShot: return .safeToDelete
-        case .screenshot, .screenRecording:           return .reviewRecommended
-        case .badExposure, .lowQuality:               return .reviewRecommended
+        case .blurry, .accidentalShot:                return .safeToDelete
+        case .screenshot, .screenRecording,
+             .panorama, .slowMotion, .timeLapse,
+             .livePhotoVideo, .savedFromMessages,
+             .savedFromWeb, .badExposure, .lowQuality: return .reviewRecommended
         case .receipt:                                 return .keepRecommended
         }
     }

@@ -141,13 +141,9 @@ final class ScanEngine: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let batch = Array(assets[batchStart..<min(batchStart + batchSize, assets.count)])
 
-                // Skip tiny assets (< 200px) — likely icons/thumbnails, not real photos
-                let realPhotos = batch.filter {
-                    $0.phAsset.pixelWidth >= 200 || $0.phAsset.pixelHeight >= 200
-                }
-
+                // Analyse every photo regardless of size
                 await withTaskGroup(of: (String, VisionAnalyzer.VisionResult).self) { group in
-                    for asset in realPhotos {
+                    for asset in batch {
                         group.addTask {
                             let vr = await self.visionAnalyzer.analyse(asset: asset.phAsset)
                             return (asset.id, vr)
