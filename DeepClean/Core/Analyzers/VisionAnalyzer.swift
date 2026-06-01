@@ -30,12 +30,31 @@ actor VisionAnalyzer {
         var isAccidentalShot: Bool = false
     }
 
-    // MARK: - Full Analysis
+    // MARK: - Full Analysis (with timeout)
 
     func analyse(asset: PHAsset) async -> VisionResult {
-        guard let image = await loadThumbnail(asset: asset),
-              let cgImage = image.cgImage else { return VisionResult() }
-        return runVisionRequests(on: cgImage, asset: asset)
+        // 8-second timeout per photo prevents hanging on HEIF, RAW, or
+        // corrupted assets whose PHImageManager callback never fires.
+        return await withTimeout(seconds: 8, default: VisionResult()) {
+            guard let image = await self.loadThumbnail(asset: asset),
+                  let cgImage = image.cgImage else { return VisionResult() }
+            return self.runVisionRequests(on: cgImage, asset: asset)
+        }
+    }
+
+    // Runs two tasks: the real work and a timer. First to finish wins.
+    private func withTimeout<T: Sendable>(seconds: Double, default fallback: T,
+                                           operation: @escaping @Sendable () async -> T) async -> T {
+        await withTaskGroup(of: T.self) { group in
+            group.addTask { await operation() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return fallback
+            }
+            let result = await group.next() ?? fallback
+            group.cancelAll()
+            return result
+        }
     }
 
     // MARK: - Vision Pipeline (iOS 26 compatible)

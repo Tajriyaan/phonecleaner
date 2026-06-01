@@ -132,9 +132,10 @@ final class ScanEngine: ObservableObject {
             // Publishes updated groups every 50 photos.
             scanState.update(phase: .visionAnalysis, processed: 0, total: assets.count)
             var visionResults: [String: VisionAnalyzer.VisionResult] = [:]
-            // Larger batch = fewer task group overhead cycles. 256x256 images use
-            // far less RAM than 512x512, so we can safely process 16 at once.
-            let batchSize = 16
+            // 6 concurrent Vision requests — small enough to avoid memory pressure
+            // while still being faster than sequential. Each task has an 8s timeout
+            // so a stuck asset never blocks the whole scan.
+            let batchSize = 6
             var processed = 0
 
             for batchStart in stride(from: 0, to: assets.count, by: batchSize) {
@@ -171,7 +172,19 @@ final class ScanEngine: ObservableObject {
                     }
                 }
                 for asset in batch { visionResults.removeValue(forKey: asset.id) }
-                // No mid-scan re-clustering — O(n²) clustering runs ONCE at the end
+
+                // Save partial results every 100 photos so user has something
+                // to review even if scan stops early (memory pressure / timeout)
+                if processed % 100 == 0 {
+                    let partial = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
+                    scanResult.groups = partial
+                    scanResult.estimatedSavingsBytes = computeSavings(groups: partial)
+                    result = scanResult
+                    ScanPersistence.shared.save(scanResult)
+                }
+
+                // Yield to system between batches to reduce memory pressure
+                await Task.yield()
             }
             guard !Task.isCancelled else { return }
 
