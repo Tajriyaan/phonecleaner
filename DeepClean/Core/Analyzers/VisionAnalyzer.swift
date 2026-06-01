@@ -172,8 +172,8 @@ actor VisionAnalyzer {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.isSynchronous = false
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .opportunistic
+            options.isNetworkAccessAllowed = true   // allow iCloud thumbnail download
+            options.deliveryMode = .fastFormat       // fastest available — degraded is fine for Vision
             options.resizeMode = .fast
 
             var resumed = false
@@ -181,10 +181,16 @@ actor VisionAnalyzer {
                 for: asset, targetSize: analysisSize,
                 contentMode: .aspectFit, options: options
             ) { image, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !isDegraded && !resumed {
+                guard !resumed else { return }
+                // Always resume on FIRST callback — never leave iCloud photos hanging.
+                // Degraded thumbnails are acceptable for Vision feature prints.
+                let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                if !isCancelled {
                     resumed = true
                     continuation.resume(returning: image)
+                } else if !resumed {
+                    resumed = true
+                    continuation.resume(returning: nil)
                 }
             }
         }

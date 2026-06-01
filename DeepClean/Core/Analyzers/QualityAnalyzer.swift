@@ -124,17 +124,22 @@ actor QualityAnalyzer {
             options.deliveryMode = .fastFormat
             options.resizeMode = .fast
             options.isSynchronous = false
-            options.isNetworkAccessAllowed = false
+            options.isNetworkAccessAllowed = true   // allow iCloud thumbnail
 
             var resumed = false
             PHImageManager.default().requestImage(
                 for: asset, targetSize: sampleSize,
                 contentMode: .aspectFit, options: options
             ) { image, info in
-                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !degraded && !resumed {
+                guard !resumed else { return }
+                // Always resume on first response — never hang on iCloud assets
+                let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                if !isCancelled {
                     resumed = true
                     continuation.resume(returning: image)
+                } else {
+                    resumed = true
+                    continuation.resume(returning: nil)
                 }
             }
         }
