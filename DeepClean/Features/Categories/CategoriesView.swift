@@ -8,7 +8,6 @@ import Photos
 struct CategoriesView: View {
     @EnvironmentObject var scanEngine: ScanEngine
     @StateObject private var store = CategoryStore.shared
-    @State private var showingBuilder = false
     @State private var selectedCategory: SmartCategory?
 
     var body: some View {
@@ -26,20 +25,7 @@ struct CategoriesView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbarBackground(Theme.Colors.background, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingBuilder = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(Theme.Gradients.accent)
-                    }
-                }
-            }
-            .sheet(isPresented: $showingBuilder) {
-                CategoryBuilderView()
-                    .environmentObject(store)
-            }
+            .toolbar { }
             .navigationDestination(item: $selectedCategory) { cat in
                 CategoryDetailView(category: cat)
                     .environmentObject(store)
@@ -63,19 +49,9 @@ struct CategoriesView: View {
                     .padding(Theme.Spacing.sm)
                 }
 
-                // User-defined first
-                let userCats = store.categories.filter { $0.isUserDefined }
-                if !userCats.isEmpty {
-                    sectionHeader("Your Categories")
-                    ForEach(userCats) { cat in
-                        categoryRow(cat)
-                    }
-                }
-
-                // Smart categories
-                sectionHeader("Smart Categories")
+                // All AI-detected categories — sorted by count descending
                 LazyVStack(spacing: Theme.Spacing.sm) {
-                    ForEach(store.categories.filter { !$0.isUserDefined }) { cat in
+                    ForEach(store.categories.sorted { $0.count > $1.count }) { cat in
                         categoryRow(cat)
                     }
                 }
@@ -154,7 +130,7 @@ struct CategoriesView: View {
             Text("Run a scan to see categories")
                 .font(Theme.Typography.title)
                 .foregroundColor(Theme.Colors.textPrimary)
-            Text("Categories appear after your first Deep Scan.\nTap + to create your own custom category.")
+            Text("Categories are populated automatically after your first Deep Scan.")
                 .font(Theme.Typography.body)
                 .foregroundColor(Theme.Colors.textSecondary)
                 .multilineTextAlignment(.center)
