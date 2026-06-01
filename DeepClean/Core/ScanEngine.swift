@@ -203,6 +203,17 @@ final class ScanEngine: ObservableObject {
             scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
             scanResult.scanDuration = Date().timeIntervalSince(start)
 
+            // ── 10. Smart Categories ─────────────────────────────────────────
+            scanState.update(phase: .finalising)
+            let faceCounts = Dictionary(
+                uniqueKeysWithValues: assets.map { ($0.id, $0.faceCount) }
+            )
+            SmartCategorizer.applyAll(
+                categories: &CategoryStore.shared.categories,
+                to: allPHAssets,
+                visionFaceCounts: faceCounts
+            )
+
             scanState.phase = .complete
             result = scanResult
             isScanning = false
