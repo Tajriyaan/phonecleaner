@@ -43,26 +43,13 @@ actor VisionAnalyzer {
         let textRequest     = VNDetectTextRectanglesRequest()
         let faceRequest     = VNDetectFaceRectanglesRequest()
 
-        var requests: [VNRequest] = [fpRequest, classifyRequest, textRequest, faceRequest]
-
-        var aestheticsRequest: VNRequest?
-        if #available(iOS 18.0, *) {
-            let ar = VNGenerateImageAestheticsScoresRequest()
-            aestheticsRequest = ar
-            requests.append(ar)
-        }
-
+        let requests: [VNRequest] = [fpRequest, classifyRequest, textRequest, faceRequest]
         try? handler.perform(requests)
 
         // Feature print
         result.featurePrint = fpRequest.results?.first as? VNFeaturePrintObservation
 
-        // Aesthetics (iOS 18+)
-        if #available(iOS 18.0, *),
-           let obs = aestheticsRequest?.results?.first as? VNImageAestheticsScoresObservation {
-            result.aestheticsScore = obs.overallScore
-            result.isUtility = obs.isUtility
-        }
+        // Aesthetics: scored by QualityAnalyzer (sharpness + exposure) — no private API needed
 
         // Classifications
         if let obs = classifyRequest.results {

@@ -2,6 +2,7 @@ import Foundation
 import Photos
 import Vision
 import AVFoundation
+import UIKit
 
 // MARK: - Video Analyzer
 
