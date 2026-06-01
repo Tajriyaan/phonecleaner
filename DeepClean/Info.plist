@@ -37,6 +37,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>whatsapp</string>
+		<string>whatsappbusiness</string>
 	</array>
 
 	<!-- UI -->

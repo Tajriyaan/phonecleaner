@@ -3,35 +3,103 @@ import Photos
 import Vision
 import UIKit
 
+// MARK: - WhatsApp App Selection
+
+enum WhatsAppApp: String, CaseIterable, Codable {
+    case whatsApp         = "WhatsApp"
+    case whatsAppBusiness = "WhatsApp Business"
+    case both             = "Both"
+
+    var urlScheme: String {
+        switch self {
+        case .whatsApp:         return "whatsapp://"
+        case .whatsAppBusiness: return "whatsappbusiness://"
+        case .both:             return "whatsapp://"
+        }
+    }
+
+    var albumKeyword: String? {
+        switch self {
+        case .whatsApp:         return "WhatsApp"
+        case .whatsAppBusiness: return "WhatsApp Business"
+        case .both:             return nil   // nil = match any whatsapp album
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .whatsApp:         return "message.fill"
+        case .whatsAppBusiness: return "briefcase.fill"
+        case .both:             return "bubble.left.and.bubble.right.fill"
+        }
+    }
+}
+
 // MARK: - WhatsApp Analyzer
-// Handles all WhatsApp-specific detection:
-//   1. Status saves (photos saved from WhatsApp Status)
-//   2. Forwarded media duplicates (same image saved from multiple chats)
-//   3. Deep link to WhatsApp's built-in storage manager
 
 actor WhatsAppAnalyzer {
 
-    // MARK: - WhatsApp Album Discovery
+    // MARK: - App Detection
 
-    /// Returns all PHAssetCollections whose title contains "whatsapp" (case-insensitive)
-    func whatsAppAlbums() -> [PHAssetCollection] {
-        var albums: [PHAssetCollection] = []
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "title CONTAINS[c] %@", "whatsapp")
-        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
-        result.enumerateObjects { collection, _, _ in albums.append(collection) }
-        return albums
+    @MainActor
+    static func installedApps() -> [WhatsAppApp] {
+        var installed: [WhatsAppApp] = []
+        if let url = URL(string: "whatsapp://"), UIApplication.shared.canOpenURL(url) {
+            installed.append(.whatsApp)
+        }
+        if let url = URL(string: "whatsappbusiness://"), UIApplication.shared.canOpenURL(url) {
+            installed.append(.whatsAppBusiness)
+        }
+        return installed
     }
 
-    /// All assets that live in any WhatsApp album
-    func allWhatsAppAssets() -> [PHAsset] {
-        let albums = whatsAppAlbums()
-        var seen  = Set<String>()
-        var assets: [PHAsset] = []
+    @MainActor
+    static func isInstalled(_ app: WhatsAppApp) -> Bool {
+        guard let url = URL(string: app.urlScheme) else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
 
-        for album in albums {
-            let fetched = PHAsset.fetchAssets(in: album, options: nil)
-            fetched.enumerateObjects { asset, _, _ in
+    @MainActor
+    static func open(_ app: WhatsAppApp) {
+        let scheme = app == .whatsAppBusiness ? "whatsappbusiness://" : "whatsapp://"
+        guard let url = URL(string: scheme),
+              UIApplication.shared.canOpenURL(url) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+    }
+
+    // MARK: - Album Discovery (filtered by selected app)
+
+    func albums(for app: WhatsAppApp) -> [PHAssetCollection] {
+        var result: [PHAssetCollection] = []
+        let options = PHFetchOptions()
+
+        if let keyword = app.albumKeyword {
+            // Match exact app — WhatsApp Business album contains "Business",
+            // regular WhatsApp album is just "WhatsApp" (does NOT contain "Business")
+            if app == .whatsApp {
+                options.predicate = NSPredicate(
+                    format: "title CONTAINS[c] %@ AND NOT title CONTAINS[c] %@",
+                    "whatsapp", "business"
+                )
+            } else {
+                options.predicate = NSPredicate(format: "title CONTAINS[c] %@", keyword)
+            }
+        } else {
+            // Both — match any whatsapp album
+            options.predicate = NSPredicate(format: "title CONTAINS[c] %@", "whatsapp")
+        }
+
+        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+            .enumerateObjects { collection, _, _ in result.append(collection) }
+        return result
+    }
+
+    func allAssets(for app: WhatsAppApp) -> [PHAsset] {
+        let albumList = albums(for: app)
+        var seen = Set<String>()
+        var assets: [PHAsset] = []
+        for album in albumList {
+            PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, _ in
                 guard !seen.contains(asset.localIdentifier) else { return }
                 seen.insert(asset.localIdentifier)
                 assets.append(asset)
@@ -40,35 +108,33 @@ actor WhatsAppAnalyzer {
         return assets
     }
 
-    // MARK: - Status Saves Detection
-    // WhatsApp Status saves have high text density (stories with overlaid text/stickers)
-    // and often land in a "WhatsApp Status Saver" album or the main WhatsApp album.
+    func storageMB(for app: WhatsAppApp) -> Double {
+        allAssets(for: app).reduce(0.0) { acc, a in
+            let bytes = PHAssetResource.assetResources(for: a)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            return acc + Double(bytes) / 1_048_576
+        }
+    }
+
+    // MARK: - Status Saves (text-heavy + portrait aspect = story saves)
 
     func statusSaves(from assets: [PHAsset]) async -> [PHAsset] {
-        var statusAssets: [PHAsset] = []
-
+        var result: [PHAsset] = []
         await withTaskGroup(of: (PHAsset, Bool).self) { group in
             for asset in assets where asset.mediaType == .image {
-                group.addTask {
-                    let isStatus = await self.looksLikeStatus(asset: asset)
-                    return (asset, isStatus)
-                }
+                group.addTask { (asset, await self.looksLikeStatus(asset: asset)) }
             }
             for await (asset, isStatus) in group {
-                if isStatus { statusAssets.append(asset) }
+                if isStatus { result.append(asset) }
             }
         }
-        return statusAssets
+        return result
     }
 
     private func looksLikeStatus(asset: PHAsset) async -> Bool {
-        // Status saves are often 9:16 aspect ratio (portrait stories)
         let ratio = Double(asset.pixelHeight) / Double(max(1, asset.pixelWidth))
-        let isStoryAspect = ratio > 1.6
-
-        // High text density is the strongest indicator
-        let hasHighText = await detectHighTextDensity(asset: asset)
-        return isStoryAspect && hasHighText
+        guard ratio > 1.6 else { return false }
+        return await detectHighTextDensity(asset: asset)
     }
 
     private func detectHighTextDensity(asset: PHAsset) async -> Bool {
@@ -86,42 +152,34 @@ actor WhatsAppAnalyzer {
                 contentMode: .aspectFit,
                 options: options
             ) { image, info in
-                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                guard !degraded, !resumed, let cgImage = image?.cgImage else { return }
+                guard !resumed else { return }
+                let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                guard !cancelled, let cgImage = image?.cgImage else {
+                    resumed = true; continuation.resume(returning: false); return
+                }
                 resumed = true
-
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .fast
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                try? handler.perform([request])
-                let textCount = request.results?.count ?? 0
-                continuation.resume(returning: textCount > 4)
+                request.usesLanguageCorrection = false
+                try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+                continuation.resume(returning: (request.results?.count ?? 0) > 4)
             }
         }
     }
 
     // MARK: - Forwarded Duplicate Detection
-    // Same image forwarded in multiple chats gets saved multiple times.
-    // We group by SHA256 hash first, then by perceptual similarity.
 
     func forwardedDuplicateGroups(from assets: [PHAsset]) async -> [[PHAsset]] {
-        // Build hash map
         var hashMap: [String: [PHAsset]] = [:]
-
         await withTaskGroup(of: (PHAsset, String?).self) { group in
             for asset in assets {
-                group.addTask {
-                    let hash = await self.quickHash(asset: asset)
-                    return (asset, hash)
-                }
+                group.addTask { (asset, await self.quickHash(asset: asset)) }
             }
             for await (asset, hash) in group {
                 guard let hash else { continue }
                 hashMap[hash, default: []].append(asset)
             }
         }
-
-        // Groups with more than 1 asset = duplicates (always keeps at least 1 later)
         return hashMap.values.filter { $0.count > 1 }.sorted { $0.count > $1.count }
     }
 
@@ -135,49 +193,16 @@ actor WhatsAppAnalyzer {
             options.version = .current
 
             var resumed = false
-            PHImageManager.default().requestImageDataAndOrientation(
-                for: asset, options: options
-            ) { data, _, _, _ in
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
                 guard !resumed else { return }
                 resumed = true
                 guard let data else { continuation.resume(returning: nil); return }
-                // Fast hash: use first 64KB + file size as fingerprint
                 let sample = data.prefix(65536)
-                let sizeTag = "\(data.count)"
-                let combined = sample.map { String($0) }.joined() + sizeTag
-                // Simple djb2 hash — fast, good enough for duplicate detection
                 var hash: UInt64 = 5381
-                for char in combined.utf8 { hash = hash &* 31 &+ UInt64(char) }
+                for byte in sample { hash = hash &* 31 &+ UInt64(byte) }
+                hash = hash &* 31 &+ UInt64(data.count)
                 continuation.resume(returning: String(hash))
             }
         }
-    }
-
-    // MARK: - WhatsApp Storage Size
-
-    func whatsAppStorageMB() -> Double {
-        let assets = allWhatsAppAssets()
-        return assets.reduce(0.0) { acc, asset in
-            let resources = PHAssetResource.assetResources(for: asset)
-            let bytes = resources.first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
-            return acc + Double(bytes) / 1_048_576
-        }
-    }
-
-    // MARK: - Deep Link
-
-    /// Checks if WhatsApp is installed. Must be called on MainActor (UIApplication requirement).
-    @MainActor
-    static func isWhatsAppInstalled() -> Bool {
-        guard let url = URL(string: "whatsapp://") else { return false }
-        return UIApplication.shared.canOpenURL(url)
-    }
-
-    /// Opens WhatsApp app. Must be called on MainActor.
-    @MainActor
-    static func openWhatsApp() {
-        guard let url = URL(string: "whatsapp://"),
-              UIApplication.shared.canOpenURL(url) else { return }
-        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 }

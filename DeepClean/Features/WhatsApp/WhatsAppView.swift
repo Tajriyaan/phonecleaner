@@ -18,6 +18,10 @@ struct WhatsAppView: View {
             } else {
                 ScrollView {
                     VStack(spacing: Theme.Spacing.lg) {
+                        // App picker — only shown when both are installed
+                        if vm.installedApps.count > 1 {
+                            appPicker
+                        }
                         storageHeader
                         openWhatsAppSection
                         if !vm.statusGroups.isEmpty   { statusSection }
@@ -42,6 +46,44 @@ struct WhatsAppView: View {
         .onAppear {
             Task { @MainActor in await vm.scan() }
         }
+    }
+
+    // MARK: - App Picker
+
+    private var appPicker: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text("Which WhatsApp to scan")
+                .font(Theme.Typography.headline)
+                .foregroundColor(Theme.Colors.textPrimary)
+
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach([WhatsAppApp.whatsApp, .whatsAppBusiness, .both], id: \.self) { app in
+                    Button {
+                        vm.selectedApp = app
+                        Task { @MainActor in await vm.scan() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: app.icon)
+                                .font(.system(size: 12))
+                            Text(app == .both ? "Both" : app.rawValue
+                                    .replacingOccurrences(of: "WhatsApp ", with: ""))
+                                .font(Theme.Typography.caption)
+                        }
+                        .foregroundColor(vm.selectedApp == app ? .white : Theme.Colors.textSecondary)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(vm.selectedApp == app
+                                    ? Color(hex: "#25D366")
+                                    : Theme.Colors.surface)
+                        .clipShape(Capsule())
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(Theme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
     // MARK: - Storage Header
@@ -85,24 +127,24 @@ struct WhatsAppView: View {
                 .foregroundColor(Theme.Colors.textSecondary)
 
             Button {
-                WhatsAppAnalyzer.openWhatsApp()
+                WhatsAppAnalyzer.open(vm.selectedApp == .whatsAppBusiness ? .whatsAppBusiness : .whatsApp)
             } label: {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "arrow.up.right.square.fill")
-                    Text(vm.whatsAppInstalled
-                         ? "Open WhatsApp Storage Manager"
-                         : "WhatsApp Not Installed")
+                    Text(vm.installedApps.isEmpty
+                         ? "WhatsApp Not Installed"
+                         : "Open \(vm.selectedApp == .both ? "WhatsApp" : vm.selectedApp.rawValue) Storage")
                         .font(Theme.Typography.headline)
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(Theme.Spacing.md)
-                .background(vm.whatsAppInstalled
+                .background(!vm.installedApps.isEmpty
                     ? Color(hex: "#25D366")
                     : Theme.Colors.textTertiary)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
             }
-            .disabled(!vm.whatsAppInstalled)
+            .disabled(vm.installedApps.isEmpty)
 
             if vm.whatsAppInstalled {
                 Text("After opening WhatsApp → Settings → Storage and Data → Manage Storage")
@@ -244,25 +286,32 @@ final class WhatsAppViewModel: ObservableObject {
     @Published var isScanning = false
     @Published var scanStatus = "Scanning…"
     @Published var totalWhatsAppMB: Double = 0
-    @Published var whatsAppInstalled = false
+    @Published var installedApps: [WhatsAppApp] = []
+    @Published var selectedApp: WhatsAppApp = .both
 
     private let analyzer = WhatsAppAnalyzer()
 
-    var savingsMB: Double         { statusSavingsMB + forwardedSavingsMB }
-    var statusSavingsMB: Double   { statusGroups.reduce(0)   { $0 + $1.estimatedSizeMB } }
+    var savingsMB: Double          { statusSavingsMB + forwardedSavingsMB }
+    var statusSavingsMB: Double    { statusGroups.reduce(0)   { $0 + $1.estimatedSizeMB } }
     var forwardedSavingsMB: Double { forwardedGroups.reduce(0) { $0 + $1.estimatedSizeMB } }
 
+    func checkInstalledApps() async {
+        let apps = await MainActor.run { WhatsAppAnalyzer.installedApps() }
+        await MainActor.run {
+            installedApps = apps
+            if apps.count > 1 { selectedApp = .both }
+            else if let first = apps.first { selectedApp = first }
+        }
+    }
+
     func scan() async {
-        await MainActor.run { isScanning = true }
+        await MainActor.run { isScanning = true; statusGroups = []; forwardedGroups = [] }
 
-        // Check WhatsApp installed (UIApplication requires MainActor)
-        let installed = await MainActor.run { WhatsAppAnalyzer.isWhatsAppInstalled() }
-        await MainActor.run { whatsAppInstalled = installed }
+        await checkInstalledApps()
 
-        // Load all WhatsApp assets
-        await MainActor.run { scanStatus = "Loading WhatsApp media…" }
-        let allAssets = await analyzer.allWhatsAppAssets()
-        let totalMB   = await analyzer.whatsAppStorageMB()
+        await MainActor.run { scanStatus = "Loading \(selectedApp.rawValue) media…" }
+        let allAssets = await analyzer.allAssets(for: selectedApp)
+        let totalMB   = await analyzer.storageMB(for: selectedApp)
         await MainActor.run { totalWhatsAppMB = totalMB }
 
         // Status saves
