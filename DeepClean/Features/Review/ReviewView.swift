@@ -18,21 +18,21 @@ struct ReviewView: View {
         ZStack {
             Theme.Colors.background.ignoresSafeArea()
 
-            if let result {
-                if result.groups.isEmpty {
-                    emptyState
-                } else {
-                    groupList(result: result)
-                }
-            } else {
-                Text("No scan results. Run a scan first.")
+            if let result, !result.groups.isEmpty {
+                groupList(result: result)
+            } else if scanEngine.isScanning {
+                scanningWaitView
+            } else if scanEngine.result == nil {
+                Text("Run a scan from the Clean tab first.")
+                    .font(Theme.Typography.body)
                     .foregroundColor(Theme.Colors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            } else {
+                emptyState
             }
 
-            // Delete overlay
-            if isDeleting {
-                deletingOverlay
-            }
+            if isDeleting { deletingOverlay }
         }
         .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.large)
@@ -62,11 +62,44 @@ struct ReviewView: View {
         }
     }
 
+    // MARK: - Scanning wait state
+
+    private var scanningWaitView: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            ProgressView().tint(Theme.Colors.accent).scaleEffect(1.5)
+            Text("Scan in progress…")
+                .font(Theme.Typography.title)
+                .foregroundColor(Theme.Colors.textPrimary)
+            Text("Results will appear here as each phase completes.\nYou can come back while the scan runs.")
+                .font(Theme.Typography.body)
+                .foregroundColor(Theme.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+    }
+
     // MARK: - Group List
 
     private func groupList(result: ScanResult) -> some View {
         ScrollView {
             VStack(spacing: Theme.Spacing.lg) {
+                // Empty Color view keyed to group count forces SwiftUI to re-render
+                // confidence sections after groups are deleted
+                Color.clear.frame(height: 0).id(result.groups.count)
+
+                // Scanning in progress banner
+                if scanEngine.isScanning {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        ProgressView().tint(Theme.Colors.accent).scaleEffect(0.7)
+                        Text("\(scanEngine.scanState.phase.rawValue) — more being found")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.textSecondary)
+                        Spacer()
+                    }
+                    .padding(Theme.Spacing.sm)
+                    .background(Theme.Colors.accent.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                }
 
                 // Savings summary banner
                 savingsBanner(result: result)
@@ -78,7 +111,6 @@ struct ReviewView: View {
                         confidenceSection(tier: tier, groups: groups)
                     }
                 }
-                .id(result.groups.count) // force list refresh when groups change
 
                 Spacer(minLength: 100)
             }

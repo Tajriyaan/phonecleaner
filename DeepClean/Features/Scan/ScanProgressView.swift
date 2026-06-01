@@ -104,8 +104,9 @@ struct ScanProgressView: View {
                 scanEngine.startScan()
             }
         }
-        .onChange(of: scanEngine.result) { _, newResult in
-            if newResult != nil && scanEngine.isScanning { dismiss() }
+        .onChange(of: scanEngine.scanState.phase) { _, phase in
+            // Only auto-dismiss when scan is fully complete — not mid-scan
+            if phase == .complete { dismiss() }
         }
     }
 
