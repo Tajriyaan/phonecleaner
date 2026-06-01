@@ -13,7 +13,6 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     PRODUCT_BUNDLE_IDENTIFIER: com.deepclean.app
-    INFOPLIST_FILE: DeepClean/Info.plist
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGNING_ALLOWED: NO
@@ -28,9 +27,15 @@ targets:
       - path: DeepClean
         excludes:
           - "**/*.plist"
-    info:
-      path: DeepClean/Info.plist
+          - "**/*.xcassets"
+    resources:
+      - path: DeepClean/Assets.xcassets
+    # Use INFOPLIST_FILE build setting — do NOT use info: path: here.
+    # xcodegen overwrites the file when info: is specified, stripping our
+    # privacy usage descriptions and causing TCC crash on launch.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.deepclean.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: DeepClean/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
