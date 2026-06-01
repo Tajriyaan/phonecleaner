@@ -29,6 +29,7 @@ struct CategoriesView: View {
             .navigationDestination(item: $selectedCategory) { cat in
                 CategoryDetailView(category: cat)
                     .environmentObject(store)
+                    .environmentObject(scanEngine)
             }
         }
     }
@@ -144,6 +145,7 @@ struct CategoriesView: View {
 struct CategoryDetailView: View {
     let category: SmartCategory
     @EnvironmentObject var store: CategoryStore
+    @EnvironmentObject var scanEngine: ScanEngine
     @State private var selectedIDs = Set<String>()
     @State private var showingDeleteConfirm = false
     @State private var allAssets: [PHAsset] = []
@@ -224,13 +226,17 @@ struct CategoryDetailView: View {
     }
 
     private func deleteSelected() {
-        let toDelete = allAssets.filter { selectedIDs.contains($0.localIdentifier) } as NSArray
+        let deletedIDs = selectedIDs
+        let toDelete = allAssets.filter { deletedIDs.contains($0.localIdentifier) } as NSArray
         PHPhotoLibrary.shared().performChanges({
             PHAssetChangeRequest.deleteAssets(toDelete)
         }) { _, _ in
             DispatchQueue.main.async {
-                allAssets.removeAll { selectedIDs.contains($0.localIdentifier) }
+                // Refresh local view
+                allAssets.removeAll { deletedIDs.contains($0.localIdentifier) }
                 selectedIDs.removeAll()
+                // Refresh all groups and categories across the whole app
+                scanEngine.removeDeletedAssets(ids: deletedIDs)
             }
         }
     }

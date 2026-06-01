@@ -205,13 +205,12 @@ final class ScanEngine: ObservableObject {
 
             // ── 10. Smart Categories ─────────────────────────────────────────
             scanState.update(phase: .finalising)
-            let faceCounts = Dictionary(
-                uniqueKeysWithValues: assets.map { ($0.id, $0.faceCount) }
-            )
+            let faceCounts = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0.faceCount) })
             SmartCategorizer.applyAll(
                 categories: &CategoryStore.shared.categories,
                 to: allPHAssets,
-                visionFaceCounts: faceCounts
+                visionFaceCounts: faceCounts,
+                mediaAssets: assets
             )
 
             scanState.phase = .complete
@@ -328,16 +327,46 @@ final class ScanEngine: ObservableObject {
 
     func deleteSelected(from group: MediaGroup) async throws {
         let toDelete = group.assetsToDelete.map(\.phAsset) as NSArray
+        let deletedIDs = Set(group.assetsToDelete.map(\.id))
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(toDelete)
         }
+        removeDeletedAssets(ids: deletedIDs)
     }
 
     func deleteAllSelected() async throws {
         guard let result else { return }
         let toDelete = result.selectedForDeletion.map(\.phAsset) as NSArray
+        let deletedIDs = Set(result.selectedForDeletion.map(\.id))
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.deleteAssets(toDelete)
+        }
+        removeDeletedAssets(ids: deletedIDs)
+    }
+
+    /// Called after any deletion — removes assets from all groups and categories,
+    /// drops empty groups, and republishes result so every screen refreshes instantly.
+    func removeDeletedAssets(ids: Set<String>) {
+        // Update scan result groups
+        if var r = result {
+            r.groups = r.groups.compactMap { group in
+                let remaining = group.assets.filter { !ids.contains($0.id) }
+                guard remaining.count > 0 else { return nil }
+                let updated = MediaGroup(
+                    groupType: group.groupType,
+                    assets: remaining,
+                    confidence: group.confidence,
+                    estimatedSizeMB: group.estimatedSizeMB * Double(remaining.count) / Double(group.assets.count)
+                )
+                return updated
+            }
+            r.estimatedSavingsBytes = computeSavings(groups: r.groups)
+            result = r
+            ScanPersistence.shared.save(r)
+        }
+        // Update smart categories
+        for i in CategoryStore.shared.categories.indices {
+            CategoryStore.shared.categories[i].assetIDs.removeAll { ids.contains($0) }
         }
     }
 }

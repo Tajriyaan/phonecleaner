@@ -37,9 +37,15 @@ enum CategoryRule: Codable, Hashable {
     case hasGPSLocation(Bool)
     case albumContains(String)
     case subtype(PHAssetMediaSubtypeWrapper)
-    case daysTaken(withinLast: Int)         // recent: "this week" = 7
-    case olderThanDays(Int)                 // old: "1 year ago" = 365
+    case daysTaken(withinLast: Int)
+    case olderThanDays(Int)
     case aspectRatio(kind: AspectKind)
+    // Vision-based (populated from MediaAsset quality scores)
+    case isBlurry
+    case isDark
+    case isOverexposed
+    case hasTextContent
+    case isObjectShot           // no face, no text = likely an object/product
 
     enum AspectKind: String, Codable {
         case portrait, landscape, square
@@ -157,48 +163,95 @@ struct SmartCategorizer {
             icon: "iphone", colorHex: "#64748B",
             rules: [.subtype(.photoScreenshot)]),
 
+        // ── Vision quality categories ─────────────────────────────────────
+        SmartCategory(name: "Blurry / Out of Focus",
+            icon: "aqi.medium", colorHex: "#94A3B8",
+            rules: [.isBlurry]),
+
+        SmartCategory(name: "Dark / Underexposed",
+            icon: "moon.circle.fill", colorHex: "#1E293B",
+            rules: [.isDark]),
+
+        SmartCategory(name: "Washed Out / Overexposed",
+            icon: "sun.max.fill", colorHex: "#FDE68A",
+            rules: [.isOverexposed]),
+
+        SmartCategory(name: "Object & Product Shots",
+            icon: "cube.fill", colorHex: "#F97316",
+            rules: [.isObjectShot, .mediaType(photo: true, video: false)]),
+
+        SmartCategory(name: "Text & Signs",
+            icon: "text.viewfinder", colorHex: "#0EA5E9",
+            rules: [.hasTextContent, .mediaType(photo: true, video: false)]),
+
     ] }
 
     // MARK: - Apply Rules
 
+    struct VisionSnapshot {
+        var faceCount: Int = 0
+        var isBlurry: Bool = false
+        var isDark: Bool = false
+        var isOverexposed: Bool = false
+        var hasText: Bool = false
+    }
+
     static func apply(category: SmartCategory, to assets: [PHAsset],
-                      visionData: [String: Int]) -> [String] {
+                      vision: [String: VisionSnapshot]) -> [String] {
         assets.compactMap { asset in
-            matches(asset: asset, rules: category.rules, visionData: visionData)
+            matches(asset: asset, rules: category.rules, vision: vision[asset.localIdentifier] ?? VisionSnapshot())
                 ? asset.localIdentifier : nil
         }
     }
 
     static func applyAll(categories: inout [SmartCategory],
                          to assets: [PHAsset],
-                         visionFaceCounts: [String: Int]) {
+                         visionFaceCounts: [String: Int],
+                         mediaAssets: [MediaAsset] = []) {
+        // Build vision snapshot from MediaAsset data
+        var snapshots: [String: VisionSnapshot] = [:]
+        for ma in mediaAssets {
+            snapshots[ma.id] = VisionSnapshot(
+                faceCount:   ma.faceCount,
+                isBlurry:    ma.qualityScore?.hasBlur ?? false,
+                isDark:      (ma.qualityScore?.exposure ?? 0.5) < 0.2,
+                isOverexposed: (ma.qualityScore?.exposure ?? 0.5) > 0.85,
+                hasText:     ma.detectedText
+            )
+        }
+        // Fallback: face count from dictionary if no MediaAsset
+        for (id, count) in visionFaceCounts where snapshots[id] == nil {
+            snapshots[id] = VisionSnapshot(faceCount: count)
+        }
+
         for i in categories.indices {
             categories[i].assetIDs = apply(
-                category: categories[i],
-                to: assets,
-                visionData: visionFaceCounts
-            )
+                category: categories[i], to: assets, vision: snapshots)
         }
     }
 
     // MARK: - Rule Matching
 
     static func matches(asset: PHAsset, rules: [CategoryRule],
-                        visionData: [String: Int]) -> Bool {
-        rules.allSatisfy { rule in
-            matchesRule(asset: asset, rule: rule, visionData: visionData)
-        }
+                        vision: VisionSnapshot) -> Bool {
+        rules.allSatisfy { matchesRule(asset: asset, rule: $0, vision: vision) }
     }
 
     private static func matchesRule(asset: PHAsset, rule: CategoryRule,
-                                     visionData: [String: Int]) -> Bool {
+                                     vision: VisionSnapshot) -> Bool {
         switch rule {
 
         case .faceCount(let min, let max):
-            let count = visionData[asset.localIdentifier] ?? 0
+            let count = vision.faceCount
             if count < min { return false }
             if let max, count > max { return false }
             return true
+
+        case .isBlurry:        return vision.isBlurry
+        case .isDark:          return vision.isDark
+        case .isOverexposed:   return vision.isOverexposed
+        case .hasTextContent:  return vision.hasText && !asset.mediaSubtypes.contains(.photoScreenshot)
+        case .isObjectShot:    return vision.faceCount == 0 && !vision.hasText
 
         case .takenBetweenHours(let from, let to):
             guard let date = asset.creationDate else { return false }
@@ -219,9 +272,8 @@ struct SmartCategorizer {
         case .hasGPSLocation(let required):
             return (asset.location != nil) == required
 
-        case .albumContains(let keyword):
-            // Albums checked separately via albumMap — approximate via sourceType
-            return true  // refined in ScanEngine using albumMap
+        case .albumContains:
+            return true  // refined externally
 
         case .subtype(let wrapper):
             switch wrapper {
