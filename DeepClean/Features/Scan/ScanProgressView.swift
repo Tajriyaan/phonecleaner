@@ -104,12 +104,8 @@ struct ScanProgressView: View {
                 scanEngine.startScan()
             }
         }
-        .onChange(of: scanEngine.result) { newResult in
-            // Auto-dismiss once first results arrive so user can start reviewing
-            // while deeper analysis continues in the background
-            if newResult != nil && scanEngine.isScanning {
-                dismiss()
-            }
+        .onChange(of: scanEngine.result) { _, newResult in
+            if newResult != nil && scanEngine.isScanning { dismiss() }
         }
     }
 
