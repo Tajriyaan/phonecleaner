@@ -8,6 +8,8 @@
 	<string>DeepClean</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -22,12 +24,33 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+
+	<!-- Privacy usage descriptions -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>DeepClean needs access to your photo library to find and remove duplicate photos, blurry shots, and junk media.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>DeepClean needs access to save changes to your photo library.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>DeepClean needs access to your contacts to find and merge duplicates.</string>
+
+	<!-- Background processing: allows scan to complete when charging + idle -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.deepclean.app.scan</string>
+	</array>
+
+	<!-- URL schemes -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+	</array>
+
+	<!-- UI -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -45,13 +68,7 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>whatsapp</string>
-	</array>
 	<key>UIUserInterfaceStyle</key>
 	<string>Dark</string>
-	<key>MinimumOSVersion</key>
-	<string>17.0</string>
 </dict>
 </plist>

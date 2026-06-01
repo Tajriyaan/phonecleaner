@@ -244,11 +244,21 @@ struct DashboardView: View {
 
             Button {
                 ScanPersistence.shared.clear()
+                UserDefaults.standard.removeObject(forKey: "lastScanChangeToken")
                 showingScanView = true
             } label: {
-                Text("Rescan Library")
-                    .font(Theme.Typography.caption)
-                    .foregroundColor(Theme.Colors.textTertiary)
+                HStack(spacing: 4) {
+                    Image(systemName: scanEngine.libraryChangedSinceLastScan
+                          ? "exclamationmark.circle" : "arrow.clockwise")
+                        .font(.caption)
+                    Text(scanEngine.libraryChangedSinceLastScan
+                         ? "New photos detected — Rescan"
+                         : "Rescan Library")
+                }
+                .font(Theme.Typography.caption)
+                .foregroundColor(scanEngine.libraryChangedSinceLastScan
+                                 ? Theme.Colors.review
+                                 : Theme.Colors.textTertiary)
             }
         }
     }

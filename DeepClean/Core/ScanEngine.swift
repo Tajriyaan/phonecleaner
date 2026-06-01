@@ -22,12 +22,30 @@ final class ScanEngine: ObservableObject {
     private var scanTask: Task<Void, Never>?
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
-    // MARK: - Init: load cached result immediately
+    // MARK: - Init: load cached result, skip rescan if library unchanged
 
     init() {
         if let cached = ScanPersistence.shared.load() {
             result = cached
         }
+    }
+
+    /// Returns true if the photo library has changed since the last scan.
+    /// Uses PHPhotoLibrary change token — if unchanged, no rescan needed.
+    var libraryChangedSinceLastScan: Bool {
+        let currentToken = PHPhotoLibrary.shared().currentChangeToken
+        let tokenData = try? NSKeyedArchiver.archivedData(
+            withRootObject: currentToken, requiringSecureCoding: true)
+        let savedData = UserDefaults.standard.data(forKey: "lastScanChangeToken")
+        if tokenData == savedData { return false }
+        return true
+    }
+
+    private func saveChangeToken() {
+        let token = PHPhotoLibrary.shared().currentChangeToken
+        let data = try? NSKeyedArchiver.archivedData(
+            withRootObject: token, requiringSecureCoding: true)
+        UserDefaults.standard.set(data, forKey: "lastScanChangeToken")
     }
 
     // MARK: - Control
@@ -175,8 +193,9 @@ final class ScanEngine: ObservableObject {
             scanState.phase = .complete
             result = scanResult
             isScanning = false
-            // Persist so next launch loads instantly without rescanning
+            // Save results + library change token — next launch detects no change
             ScanPersistence.shared.save(scanResult)
+            saveChangeToken()
 
         } catch {
             scanState.phase = .failed
