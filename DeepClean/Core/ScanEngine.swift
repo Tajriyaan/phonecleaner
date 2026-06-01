@@ -89,7 +89,8 @@ final class ScanEngine: ObservableObject {
                     visionResults[id] = vr
                     processed += 1
                     if processed % 20 == 0 {
-                        scanState.update(phase: .visionAnalysis, processed: processed, total: assets.count)
+                        let p = processed, t = assets.count
+                        await MainActor.run { scanState.update(phase: .visionAnalysis, processed: p, total: t) }
                     }
                 }
             }
@@ -121,7 +122,8 @@ final class ScanEngine: ObservableObject {
                     assets.first { $0.id == id }?.qualityScore = score
                     processed += 1
                     if processed % 50 == 0 {
-                        scanState.update(phase: .qualityScoring, processed: processed, total: assets.count)
+                        let p = processed, t = assets.count
+                        await MainActor.run { scanState.update(phase: .qualityScoring, processed: p, total: t) }
                     }
                 }
             }

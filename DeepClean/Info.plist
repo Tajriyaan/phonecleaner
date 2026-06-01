@@ -45,6 +45,10 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+	</array>
 	<key>UIUserInterfaceStyle</key>
 	<string>Dark</string>
 	<key>MinimumOSVersion</key>
