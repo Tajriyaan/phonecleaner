@@ -13,7 +13,7 @@ import UIKit
 //      → fast, catches near-exact duplicates even if metadata differs
 //   Groups assets that share either key.
 
-actor HashAnalyzer {
+struct HashAnalyzer {
 
     private let imageManager = PHImageManager.default()
 

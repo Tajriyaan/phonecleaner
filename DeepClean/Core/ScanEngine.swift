@@ -241,7 +241,7 @@ final class ScanEngine: ObservableObject {
     private func buildVideoGroups(videoAssets: [PHAsset]) async -> [MediaGroup] {
         var groups: [MediaGroup] = []
 
-        let accidental = await videoAnalyzer.accidentalClips(assets: videoAssets)
+        let accidental = videoAnalyzer.accidentalClips(assets: videoAssets)
         if !accidental.isEmpty {
             groups.append(MediaGroup(
                 groupType: .junk(.accidentalShot),
@@ -251,7 +251,7 @@ final class ScanEngine: ObservableObject {
             ))
         }
 
-        let screenRecs = await videoAnalyzer.screenRecordings(assets: videoAssets)
+        let screenRecs = videoAnalyzer.screenRecordings(assets: videoAssets)
         if !screenRecs.isEmpty {
             groups.append(MediaGroup(
                 groupType: .junk(.screenRecording),

@@ -7,7 +7,7 @@ import Accelerate
 // Scores sharpness, exposure, and noise for a photo asset.
 // Uses simple loop-based Laplacian (no unsafe pointer arithmetic).
 
-actor QualityAnalyzer {
+struct QualityAnalyzer {
 
     private let sampleSize = CGSize(width: 256, height: 256)
 

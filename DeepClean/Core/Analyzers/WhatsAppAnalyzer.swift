@@ -37,7 +37,7 @@ enum WhatsAppApp: String, CaseIterable, Codable {
 
 // MARK: - WhatsApp Analyzer
 
-actor WhatsAppAnalyzer {
+struct WhatsAppAnalyzer {
 
     // MARK: - App Detection
 

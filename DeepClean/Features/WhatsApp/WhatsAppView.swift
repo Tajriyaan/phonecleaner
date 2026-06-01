@@ -317,8 +317,8 @@ final class WhatsAppViewModel: ObservableObject {
         await checkInstalledApps()
 
         await MainActor.run { scanStatus = "Loading \(selectedApp.rawValue) media…" }
-        let allAssets = await analyzer.allAssets(for: selectedApp)
-        let totalMB   = await analyzer.storageMB(for: selectedApp)
+        let allAssets = analyzer.allAssets(for: selectedApp)
+        let totalMB   = analyzer.storageMB(for: selectedApp)
         await MainActor.run { totalWhatsAppMB = totalMB }
 
         // Status saves

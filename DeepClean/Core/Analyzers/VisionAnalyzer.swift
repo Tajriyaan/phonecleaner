@@ -11,7 +11,10 @@ import UIKit
 //   VNRecognizeTextRequest              (iOS 13+)
 // Removed: VNClassifyImageRequest (removed iOS 26), VNDetectTextRectanglesRequest (removed iOS 26)
 
-actor VisionAnalyzer {
+// Plain struct — PHImageManager and Vision framework are thread-safe.
+// Using actor caused all 10 concurrent analyse() calls to queue on the actor
+// instead of running in parallel, making Vision appear stuck.
+struct VisionAnalyzer {
 
     private let imageManager = PHImageManager.default()
     private let analysisSize = CGSize(width: 256, height: 256)  // 4x fewer pixels, same accuracy
@@ -59,7 +62,7 @@ actor VisionAnalyzer {
 
     // MARK: - Vision Pipeline (iOS 26 compatible)
 
-    private nonisolated func runVisionRequests(on cgImage: CGImage, asset: PHAsset) -> VisionResult {
+    private func runVisionRequests(on cgImage: CGImage, asset: PHAsset) -> VisionResult {
         var result = VisionResult()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
 
@@ -107,7 +110,7 @@ actor VisionAnalyzer {
 
     // MARK: - Face Quality
 
-    private nonisolated func assessFaceQuality(faces: [VNFaceObservation], in cgImage: CGImage) -> Float {
+    private func assessFaceQuality(faces: [VNFaceObservation], in cgImage: CGImage) -> Float {
         guard let largest = faces.max(by: {
             $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height
         }) else { return 0 }
@@ -136,7 +139,7 @@ actor VisionAnalyzer {
         return eyeScore * 0.4 + sharpness * 0.6
     }
 
-    private nonisolated func eyeOpenness(_ landmark: VNFaceLandmarkRegion2D) -> Float {
+    private func eyeOpenness(_ landmark: VNFaceLandmarkRegion2D) -> Float {
         let points = landmark.normalizedPoints
         guard points.count >= 6 else { return 0.2 }
         let topY    = (points[1].y + points[2].y + points[3].y) / 3
@@ -154,7 +157,7 @@ actor VisionAnalyzer {
 
     // MARK: - Laplacian Sharpness
 
-    nonisolated func laplacianSharpness(of cgImage: CGImage) -> Float {
+    func laplacianSharpness(of cgImage: CGImage) -> Float {
         guard let provider = cgImage.dataProvider,
               let cfData   = provider.data,
               let ptr       = CFDataGetBytePtr(cfData) else { return 0 }

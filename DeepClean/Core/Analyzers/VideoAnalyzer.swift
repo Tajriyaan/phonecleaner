@@ -6,7 +6,7 @@ import UIKit
 
 // MARK: - Video Analyzer
 
-actor VideoAnalyzer {
+struct VideoAnalyzer {
 
     private let frameCount = 6
     private let similarityThreshold: Float = 0.45
