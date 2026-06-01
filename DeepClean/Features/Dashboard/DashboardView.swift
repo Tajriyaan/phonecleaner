@@ -227,8 +227,9 @@ struct DashboardView: View {
                 showingPermissionAlert = true
                 return
             }
+            // startScan() is called from ScanProgressView.onAppear
+            // so the view is fully rendered before any async work begins
             showingScanView = true
-            scanEngine.startScan()
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "sparkles")

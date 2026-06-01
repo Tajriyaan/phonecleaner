@@ -1,5 +1,8 @@
 import SwiftUI
 
+// MARK: - Scan Progress View
+// Kept intentionally simple for maximum iOS compatibility.
+
 struct ScanProgressView: View {
     @EnvironmentObject var scanEngine: ScanEngine
     @Environment(\.dismiss) var dismiss
@@ -11,56 +14,38 @@ struct ScanProgressView: View {
             VStack(spacing: Theme.Spacing.xl) {
                 Spacer()
 
-                // Animated icon
-                ZStack {
-                    ForEach(0..<3, id: \.self) { i in
-                        Circle()
-                            .stroke(Theme.Colors.accent.opacity(0.2 - Double(i) * 0.06), lineWidth: 1)
-                            .frame(width: CGFloat(120 + i * 40))
-                            .scaleEffect(pulseScale(index: i))
-                            .animation(
-                                .easeInOut(duration: 1.5).repeatForever().delay(Double(i) * 0.3),
-                                value: scanEngine.scanState.isScanning
-                            )
-                    }
-
-                    Image(systemName: scanPhaseIcon)
-                        .font(.system(size: 40))
-                        .foregroundStyle(Theme.Gradients.accent)
-                        .rotationEffect(.degrees(scanEngine.scanState.isScanning ? 360 : 0))
-                        .animation(
-                            .linear(duration: 4).repeatForever(autoreverses: false),
-                            value: scanEngine.scanState.isScanning
-                        )
-                }
-                .frame(height: 180)
+                // Icon
+                Image(systemName: scanPhaseIcon)
+                    .font(.system(size: 64))
+                    .foregroundColor(Theme.Colors.accent)
+                    .padding(.bottom, Theme.Spacing.sm)
 
                 // Phase label
-                VStack(spacing: Theme.Spacing.sm) {
-                    Text(scanEngine.scanState.phase.rawValue)
-                        .font(Theme.Typography.title)
-                        .foregroundColor(Theme.Colors.textPrimary)
-                        .animation(.easeInOut, value: scanEngine.scanState.phase)
+                Text(scanEngine.scanState.phase.rawValue)
+                    .font(Theme.Typography.title)
+                    .foregroundColor(Theme.Colors.textPrimary)
+                    .multilineTextAlignment(.center)
 
-                    if scanEngine.scanState.totalCount > 0 {
-                        Text("\(scanEngine.scanState.processedCount) / \(scanEngine.scanState.totalCount)")
-                            .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.textSecondary)
-                    }
+                // Count
+                if scanEngine.scanState.totalCount > 0 {
+                    Text("\(scanEngine.scanState.processedCount) of \(scanEngine.scanState.totalCount)")
+                        .font(Theme.Typography.body)
+                        .foregroundColor(Theme.Colors.textSecondary)
                 }
 
                 // Progress bar
                 VStack(spacing: Theme.Spacing.sm) {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: Theme.Radius.pill)
+                            RoundedRectangle(cornerRadius: 4)
                                 .fill(Theme.Colors.separator)
                                 .frame(height: 6)
-
-                            RoundedRectangle(cornerRadius: Theme.Radius.pill)
-                                .fill(Theme.Gradients.accent)
-                                .frame(width: geo.size.width * scanEngine.scanState.progress, height: 6)
-                                .animation(.easeInOut(duration: 0.3), value: scanEngine.scanState.progress)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Colors.accent)
+                                .frame(
+                                    width: geo.size.width * scanEngine.scanState.progress,
+                                    height: 6
+                                )
                         }
                     }
                     .frame(height: 6)
@@ -71,12 +56,12 @@ struct ScanProgressView: View {
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
 
-                // Phase checklist
-                phaseChecklist
+                // Step list
+                stepList
 
                 Spacer()
 
-                // Complete / cancel button
+                // Action button
                 if scanEngine.scanState.phase == .complete {
                     Button {
                         dismiss()
@@ -86,54 +71,58 @@ struct ScanProgressView: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding(Theme.Spacing.md)
-                            .background(Theme.Gradients.accent)
+                            .background(Theme.Colors.accent)
                             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
                     }
                     .padding(.horizontal, Theme.Spacing.lg)
+                } else if scanEngine.scanState.phase == .failed {
+                    VStack(spacing: Theme.Spacing.sm) {
+                        Text(scanEngine.scanState.error?.localizedDescription ?? "Something went wrong.")
+                            .font(Theme.Typography.caption)
+                            .foregroundColor(Theme.Colors.danger)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, Theme.Spacing.lg)
+                        Button("Dismiss") {
+                            scanEngine.cancelScan()
+                            dismiss()
+                        }
+                        .foregroundColor(Theme.Colors.textTertiary)
+                    }
                 } else {
-                    Button {
+                    Button("Cancel") {
                         scanEngine.cancelScan()
                         dismiss()
-                    } label: {
-                        Text("Cancel")
-                            .font(Theme.Typography.body)
-                            .foregroundColor(Theme.Colors.textTertiary)
                     }
+                    .font(Theme.Typography.body)
+                    .foregroundColor(Theme.Colors.textTertiary)
                 }
             }
             .padding(Theme.Spacing.lg)
         }
+        .onAppear {
+            // Start scan here so the view is fully rendered first
+            if !scanEngine.isScanning {
+                scanEngine.startScan()
+            }
+        }
     }
 
-    // MARK: - Phase Checklist
+    // MARK: - Step List
 
-    private var phaseChecklist: some View {
-        let phases: [(String, ScanPhase)] = [
+    private var stepList: some View {
+        let steps: [(String, ScanPhase)] = [
             ("Exact Duplicates",   .hashingAssets),
             ("AI Visual Analysis", .visionAnalysis),
             ("Quality Scoring",    .qualityScoring),
             ("Video Analysis",     .videoAnalysis),
-            ("Clustering Groups",  .clustering),
+            ("Grouping",           .clustering),
             ("Junk Detection",     .junkDetection),
             ("iCloud Check",       .icloudCheck),
         ]
-        let currentIdx = ScanPhase.allCases.firstIndex(of: scanEngine.scanState.phase) ?? 0
 
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            ForEach(phases, id: \.0) { label, phase in
-                let phaseIdx = ScanPhase.allCases.firstIndex(of: phase) ?? 0
-                let isDone = currentIdx > phaseIdx
-                let isActive = currentIdx == phaseIdx
-
-                HStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: isDone ? "checkmark.circle.fill" : isActive ? "circle.fill" : "circle")
-                        .foregroundColor(isDone ? Theme.Colors.safe : isActive ? Theme.Colors.accent : Theme.Colors.textTertiary)
-                        .font(.system(size: 14))
-
-                    Text(label)
-                        .font(Theme.Typography.body)
-                        .foregroundColor(isDone ? Theme.Colors.textSecondary : isActive ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
-                }
+            ForEach(steps, id: \.0) { step in
+                stepRow(label: step.0, phase: step.1)
             }
         }
         .padding(Theme.Spacing.md)
@@ -141,20 +130,35 @@ struct ScanProgressView: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
-    private var scanPhaseIcon: String {
-        switch scanEngine.scanState.phase {
-        case .hashingAssets:  return "number.circle"
-        case .visionAnalysis: return "eye.circle"
-        case .qualityScoring: return "star.circle"
-        case .videoAnalysis:  return "video.circle"
-        case .clustering:     return "circle.grid.2x2"
-        case .junkDetection:  return "trash.circle"
-        case .complete:       return "checkmark.circle"
-        default:              return "sparkle"
+    private func stepRow(label: String, phase: ScanPhase) -> some View {
+        let allCases = ScanPhase.allCases
+        let currentIdx = allCases.firstIndex(of: scanEngine.scanState.phase) ?? 0
+        let phaseIdx   = allCases.firstIndex(of: phase) ?? 0
+        let isDone     = currentIdx > phaseIdx
+        let isActive   = scanEngine.scanState.phase == phase
+
+        return HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: isDone ? "checkmark.circle.fill" : isActive ? "circle.fill" : "circle")
+                .foregroundColor(isDone ? Theme.Colors.safe : isActive ? Theme.Colors.accent : Theme.Colors.textTertiary)
+                .font(.system(size: 14))
+
+            Text(label)
+                .font(Theme.Typography.body)
+                .foregroundColor(isDone ? Theme.Colors.textSecondary : isActive ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
         }
     }
 
-    private func pulseScale(index: Int) -> CGFloat {
-        scanEngine.scanState.isScanning ? 1.15 : 1.0
+    private var scanPhaseIcon: String {
+        switch scanEngine.scanState.phase {
+        case .hashingAssets:  return "number.circle.fill"
+        case .visionAnalysis: return "eye.circle.fill"
+        case .qualityScoring: return "star.circle.fill"
+        case .videoAnalysis:  return "video.circle.fill"
+        case .clustering:     return "circle.grid.2x2.fill"
+        case .junkDetection:  return "trash.circle.fill"
+        case .complete:       return "checkmark.circle.fill"
+        case .failed:         return "xmark.circle.fill"
+        default:              return "sparkle"
+        }
     }
 }
