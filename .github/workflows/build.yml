@@ -46,13 +46,29 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
           | xcpretty
 
-      - name: Package IPA
+      - name: Verify app bundle exists
+        run: |
+          APP="$RUNNER_TEMP/DeepClean.xcarchive/Products/Applications/DeepClean.app"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: DeepClean.app not found in archive"
+            ls "$RUNNER_TEMP/DeepClean.xcarchive/Products/Applications/" || true
+            exit 1
+          fi
+          echo "App bundle size:"
+          du -sh "$APP"
+          echo "App binary exists:"
+          ls -lh "$APP/DeepClean"
+
+      - name: Package IPA (preserve symlinks with ditto)
         run: |
           mkdir -p "$RUNNER_TEMP/Payload"
-          cp -r "$RUNNER_TEMP/DeepClean.xcarchive/Products/Applications/DeepClean.app" \
+          # Use ditto — Apple's tool that preserves symlinks and resource forks correctly
+          ditto "$RUNNER_TEMP/DeepClean.xcarchive/Products/Applications/DeepClean.app" \
                 "$RUNNER_TEMP/Payload/DeepClean.app"
           cd "$RUNNER_TEMP"
-          zip -r DeepClean.ipa Payload
+          # -y flag preserves symlinks in the zip archive (required for valid IPA)
+          zip -r -y DeepClean.ipa Payload
+          echo "IPA size: $(du -sh DeepClean.ipa | cut -f1)"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
