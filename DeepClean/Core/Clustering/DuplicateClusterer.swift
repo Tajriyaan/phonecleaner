@@ -114,7 +114,7 @@ struct DuplicateClusterer {
             if current.isEmpty {
                 current.append(asset); continue
             }
-            let prev = current.last!
+            guard let prev = current.last else { current = [asset]; continue }
             let gap  = asset.phAsset.creationDate?
                 .timeIntervalSince(prev.phAsset.creationDate ?? .distantPast) ?? 999
             if gap <= Self.burstTimeWindowSeconds {

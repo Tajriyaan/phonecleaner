@@ -39,7 +39,9 @@ struct WhatsAppView: View {
             GroupDetailView(group: group)
                 .environmentObject(scanEngine)
         }
-        .task { await vm.scan() }
+        .onAppear {
+            Task { @MainActor in await vm.scan() }
+        }
     }
 
     // MARK: - Storage Header

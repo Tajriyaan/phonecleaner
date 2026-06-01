@@ -25,7 +25,11 @@ final class ScanEngine: ObservableObject {
     func startScan() {
         guard !isScanning else { return }
         isScanning = true
-        scanTask = Task { await self.performScan() }
+        // Explicit @MainActor ensures performScan() always runs on the main actor
+        // regardless of how iOS 26 handles unstructured Task inheritance
+        scanTask = Task { @MainActor in
+            await self.performScan()
+        }
     }
 
     func cancelScan() {

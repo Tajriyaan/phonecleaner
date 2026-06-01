@@ -1,13 +1,12 @@
 import SwiftUI
 import Photos
-import UIKit
 
 struct DashboardView: View {
     @EnvironmentObject var scanEngine: ScanEngine
+    @Environment(\.openURL) private var openURL       // avoids UIApplication.shared
     @State private var showingScanView = false
     @State private var showingReview = false
     @State private var deviceStorage: (used: Double, total: Double) = (0, 0)
-    @State private var permissionError: String?
     @State private var showingPermissionAlert = false
 
     var body: some View {
@@ -17,23 +16,15 @@ struct DashboardView: View {
 
                 ScrollView {
                     VStack(spacing: Theme.Spacing.lg) {
-
-                        // Header
                         headerSection
-
-                        // Storage ring
                         storageRingSection
 
-                        // Quick stats if scan done
                         if let result = scanEngine.result {
                             scanSummarySection(result: result)
                             categoryCardsSection(result: result)
-
-                            // Review button
                             reviewButton
                                 .onTapGesture { showingReview = true }
                         } else {
-                            // Scan prompt
                             scanPromptSection
                         }
 
@@ -43,16 +34,21 @@ struct DashboardView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .onAppear { loadDeviceStorage(); checkPhotoPermission() }
+            .onAppear {
+                loadDeviceStorage()
+                // Actually REQUEST authorization on first appear so the
+                // system dialog shows before the user taps anything.
+                Task { await requestPhotoAccess() }
+            }
             .alert("Photos Access Required", isPresented: $showingPermissionAlert) {
                 Button("Open Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                        openURL(url)
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(permissionError ?? "Please allow Full Access to Photos in Settings → Privacy & Security → Photos → DeepClean")
+                Text("DeepClean needs Full Access to Photos.\nSettings → Privacy & Security → Photos → DeepClean → Full Access")
             }
             .sheet(isPresented: $showingScanView) {
                 ScanProgressView()
@@ -62,6 +58,27 @@ struct DashboardView: View {
                 ReviewView()
                     .environmentObject(scanEngine)
             }
+        }
+    }
+
+    // MARK: - Permission Request
+    // Called on appear — shows the system dialog on first launch,
+    // shows an alert if already denied.
+
+    private func requestPhotoAccess() async {
+        let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch current {
+        case .authorized, .limited:
+            break   // already have access, nothing to do
+        case .notDetermined:
+            let granted = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            if granted == .denied || granted == .restricted {
+                showingPermissionAlert = true
+            }
+        case .denied, .restricted:
+            showingPermissionAlert = true
+        @unknown default:
+            break
         }
     }
 
@@ -91,11 +108,10 @@ struct DashboardView: View {
         VStack(spacing: Theme.Spacing.md) {
             StorageRingView(
                 usedGB: deviceStorage.used,
-                totalGB: deviceStorage.total,
+                totalGB: max(1, deviceStorage.total),
                 savingsGB: scanEngine.result?.totalSavingsGB ?? 0,
                 animated: true
             )
-
             HStack(spacing: Theme.Spacing.xl) {
                 StorageCategoryBar(label: "Photos", usedGB: 0, color: Theme.Colors.accent)
                 StorageCategoryBar(label: "Videos", usedGB: 0, color: Theme.Colors.accentSecondary)
@@ -110,21 +126,9 @@ struct DashboardView: View {
 
     private func scanSummarySection(result: ScanResult) -> some View {
         HStack(spacing: Theme.Spacing.md) {
-            statCard(
-                value: result.totalDuplicateGroups,
-                label: "Duplicate Groups",
-                color: Theme.Colors.danger
-            )
-            statCard(
-                value: result.totalJunkItems,
-                label: "Junk Items",
-                color: Theme.Colors.review
-            )
-            statCard(
-                value: String(format: "%.1f GB", result.totalSavingsGB),
-                label: "Can Save",
-                color: Theme.Colors.safe
-            )
+            statCard(value: result.totalDuplicateGroups, label: "Duplicate Groups", color: Theme.Colors.danger)
+            statCard(value: result.totalJunkItems,       label: "Junk Items",       color: Theme.Colors.review)
+            statCard(value: String(format: "%.1f GB", result.totalSavingsGB), label: "Can Save", color: Theme.Colors.safe)
         }
     }
 
@@ -152,7 +156,6 @@ struct DashboardView: View {
                 .font(Theme.Typography.headline)
                 .foregroundColor(Theme.Colors.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
             ForEach(result.groups.prefix(6)) { group in
                 categoryCard(group: group)
             }
@@ -164,7 +167,6 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(group.confidence.themeColor)
                 .frame(width: 4, height: 40)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(group.title)
                     .font(Theme.Typography.headline)
@@ -174,12 +176,10 @@ struct DashboardView: View {
                     .foregroundColor(Theme.Colors.textSecondary)
             }
             Spacer()
-
             Text(group.confidence.label)
                 .font(Theme.Typography.tiny)
                 .foregroundColor(group.confidence.themeColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(group.confidence.themeColor.opacity(0.15))
                 .clipShape(Capsule())
         }
@@ -195,7 +195,6 @@ struct DashboardView: View {
             Image(systemName: "magnifyingglass.circle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(Theme.Gradients.accent)
-
             VStack(spacing: Theme.Spacing.sm) {
                 Text("Ready to Deep Clean")
                     .font(Theme.Typography.title)
@@ -205,36 +204,23 @@ struct DashboardView: View {
                     .foregroundColor(Theme.Colors.textSecondary)
                     .multilineTextAlignment(.center)
             }
-
             scanButton
         }
         .padding(Theme.Spacing.xl)
     }
 
-    private func checkPhotoPermission() {
-        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        if status == .denied || status == .restricted {
-            permissionError = "DeepClean needs Full Access to Photos. Go to Settings → Privacy & Security → Photos → DeepClean → Full Access."
-            showingPermissionAlert = true
-        }
-    }
-
     private var scanButton: some View {
         Button {
             let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-            if status == .denied || status == .restricted {
-                permissionError = "Please allow Full Access to Photos in Settings → Privacy & Security → Photos → DeepClean."
+            guard status == .authorized || status == .limited else {
                 showingPermissionAlert = true
                 return
             }
-            // startScan() is called from ScanProgressView.onAppear
-            // so the view is fully rendered before any async work begins
             showingScanView = true
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "sparkles")
-                Text("Start Deep Scan")
-                    .font(Theme.Typography.headline)
+                Text("Start Deep Scan").font(Theme.Typography.headline)
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
@@ -247,8 +233,7 @@ struct DashboardView: View {
     private var reviewButton: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "checkmark.circle.fill")
-            Text("Review & Clean")
-                .font(Theme.Typography.headline)
+            Text("Review & Clean").font(Theme.Typography.headline)
         }
         .foregroundColor(.white)
         .frame(maxWidth: .infinity)
@@ -261,8 +246,8 @@ struct DashboardView: View {
 
     private func loadDeviceStorage() {
         if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()) {
-            let total = (attrs[.systemSize] as? Int64 ?? 0)
-            let free  = (attrs[.systemFreeSize] as? Int64 ?? 0)
+            let total = attrs[.systemSize]     as? Int64 ?? 0
+            let free  = attrs[.systemFreeSize] as? Int64 ?? 0
             deviceStorage = (
                 used:  Double(total - free) / 1_073_741_824,
                 total: Double(total) / 1_073_741_824
