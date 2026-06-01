@@ -146,7 +146,7 @@ struct WhatsAppView: View {
             }
             .disabled(vm.installedApps.isEmpty)
 
-            if vm.whatsAppInstalled {
+            if !vm.installedApps.isEmpty {
                 Text("After opening WhatsApp → Settings → Storage and Data → Manage Storage")
                     .font(Theme.Typography.tiny)
                     .foregroundColor(Theme.Colors.textTertiary)

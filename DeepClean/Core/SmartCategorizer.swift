@@ -3,7 +3,9 @@ import Photos
 
 // MARK: - Smart Category
 
-struct SmartCategory: Identifiable, Codable {
+struct SmartCategory: Identifiable, Codable, Hashable {
+    static func == (lhs: SmartCategory, rhs: SmartCategory) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
     let id: UUID
     var name: String
     var icon: String
