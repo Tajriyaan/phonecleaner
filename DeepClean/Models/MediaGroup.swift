@@ -14,16 +14,23 @@ final class MediaGroup: Identifiable, ObservableObject, Hashable {
     enum GroupType: Hashable {
         case duplicates(SimilarityType)
         case junk(JunkType)
+        case whatsApp(WhatsAppGroupType)
         case largeFiles
         case contacts
     }
 
+    enum WhatsAppGroupType: String, Hashable {
+        case forwardedDuplicate = "WhatsApp Forwarded Duplicate"
+        case statusSave         = "WhatsApp Status Save"
+    }
+
     var title: String {
         switch groupType {
-        case .duplicates(let t): return t.rawValue
-        case .junk(let t):       return t.rawValue
-        case .largeFiles:        return "Large Files"
-        case .contacts:          return "Duplicate Contacts"
+        case .duplicates(let t):  return t.rawValue
+        case .junk(let t):        return t.rawValue
+        case .whatsApp(let t):    return t.rawValue
+        case .largeFiles:         return "Large Files"
+        case .contacts:           return "Duplicate Contacts"
         }
     }
 
@@ -44,7 +51,14 @@ final class MediaGroup: Identifiable, ObservableObject, Hashable {
 
         let best = assets.max { ($0.qualityScore?.composite ?? 0) < ($1.qualityScore?.composite ?? 0) }
         let toDelete = assets.filter { !$0.isFavorite && $0.id != best?.id }
-        self.selectedForDeletion = Set(toDelete.map(\.id))
+        var selection = Set(toDelete.map(\.id))
+
+        // Safety: always keep at least 1 asset — never allow full deletion of a group
+        if selection.count >= assets.count {
+            let keepAsset = assets.first { !$0.isFavorite } ?? assets.first
+            if let keepID = keepAsset?.id { selection.remove(keepID) }
+        }
+        self.selectedForDeletion = selection
     }
 
     // MARK: Hashable / Equatable (identity-based)

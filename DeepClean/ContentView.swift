@@ -4,7 +4,21 @@ struct ContentView: View {
     @EnvironmentObject var scanEngine: ScanEngine
 
     var body: some View {
-        DashboardView()
-            .environmentObject(scanEngine)
+        TabView {
+            DashboardView()
+                .environmentObject(scanEngine)
+                .tabItem {
+                    Label("Clean", systemImage: "sparkles")
+                }
+
+            NavigationStack {
+                WhatsAppView()
+                    .environmentObject(scanEngine)
+            }
+            .tabItem {
+                Label("WhatsApp", systemImage: "bubble.left.and.bubble.right.fill")
+            }
+        }
+        .tint(Theme.Colors.accent)
     }
 }
