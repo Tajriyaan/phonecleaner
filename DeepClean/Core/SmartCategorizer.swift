@@ -46,6 +46,7 @@ enum CategoryRule: Codable, Hashable {
     case isOverexposed
     case hasTextContent
     case isObjectShot           // no face, no text = likely an object/product
+    case isVeryShortVideo       // duration < 5 seconds
 
     enum AspectKind: String, Codable {
         case portrait, landscape, square
@@ -184,6 +185,53 @@ struct SmartCategorizer {
             icon: "text.viewfinder", colorHex: "#0EA5E9",
             rules: [.hasTextContent, .mediaType(photo: true, video: false)]),
 
+        // ── High-volume clutter (mass deletion targets) ───────────────────
+
+        // People photograph receipts, price tags, parking meters, signs,
+        // menus, QR codes — then forget about them. High text + portrait + old = temp reference.
+        SmartCategory(name: "Quick Reference Shots",
+            icon: "doc.text.magnifyingglass", colorHex: "#D97706",
+            rules: [.hasTextContent, .aspectRatio(kind: .portrait),
+                    .faceCount(min: 0, max: 0), .olderThanDays(30)]),
+
+        // Whiteboard photos, meeting notes, handwritten notes, class slides
+        SmartCategory(name: "Meeting & Notes",
+            icon: "rectangle.and.pencil.and.ellipsis", colorHex: "#0284C7",
+            rules: [.hasTextContent, .aspectRatio(kind: .landscape),
+                    .faceCount(min: 0, max: 0)]),
+
+        // Photos taken at night at events — almost always dark and useless
+        SmartCategory(name: "Dark Event Photos",
+            icon: "sparkles", colorHex: "#1E1B4B",
+            rules: [.isDark, .takenBetweenHours(from: 19, to: 4),
+                    .mediaType(photo: true, video: false)]),
+
+        // Videos longer than 5 minutes — biggest storage hogs
+        SmartCategory(name: "Long Videos (5+ min)",
+            icon: "clock.badge.fill", colorHex: "#BE123C",
+            rules: [.mediaType(photo: false, video: true), .fileSizeAboveMB(100)]),
+
+        // Very short videos under 5 seconds — accidental presses
+        SmartCategory(name: "Short Accidental Videos",
+            icon: "video.slash.fill", colorHex: "#64748B",
+            rules: [.mediaType(photo: false, video: true), .fileSizeAboveMB(0), .isVeryShortVideo]),
+
+        // Photos from 3+ years ago with low quality — likely junk that survived
+        SmartCategory(name: "Old Low-Quality Photos",
+            icon: "clock.arrow.circlepath", colorHex: "#78716C",
+            rules: [.olderThanDays(1095), .isBlurry]),
+
+        // Forward/meme detection: text-heavy + not a screenshot = likely forwarded image
+        SmartCategory(name: "Memes & Forwards",
+            icon: "arrowshape.turn.up.right.fill", colorHex: "#7E22CE",
+            rules: [.hasTextContent, .isObjectShot]),  // text + no face = forwarded content
+
+        // Duplicate-like: same location GPS within minutes
+        SmartCategory(name: "Repeated Location Shots",
+            icon: "location.north.line.fill", colorHex: "#0F766E",
+            rules: [.hasGPSLocation(true), .faceCount(min: 0, max: 0),
+                    .mediaType(photo: true, video: false)]),
+
     ] }
 
     // MARK: - Apply Rules
@@ -251,7 +299,8 @@ struct SmartCategorizer {
         case .isDark:          return vision.isDark
         case .isOverexposed:   return vision.isOverexposed
         case .hasTextContent:  return vision.hasText && !asset.mediaSubtypes.contains(.photoScreenshot)
-        case .isObjectShot:    return vision.faceCount == 0 && !vision.hasText
+        case .isObjectShot:        return vision.faceCount == 0 && !vision.hasText
+        case .isVeryShortVideo:    return asset.mediaType == .video && asset.duration < 5.0
 
         case .takenBetweenHours(let from, let to):
             guard let date = asset.creationDate else { return false }
