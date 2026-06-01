@@ -39,7 +39,7 @@ struct DashboardView: View {
                     .padding(.horizontal, Theme.Spacing.md)
                 }
             }
-            .navigationBarHidden(true)
+            .toolbar(.hidden, for: .navigationBar)
             .onAppear { loadDeviceStorage() }
             .sheet(isPresented: $showingScanView) {
                 ScanProgressView()

@@ -11,13 +11,12 @@ final class ScanEngine: ObservableObject {
     @Published var result: ScanResult?
     @Published var isScanning = false
 
-    // Actors initialised on first use — stored as nonisolated lets on MainActor class is fine
-    nonisolated let hashAnalyzer    = HashAnalyzer()
-    nonisolated let visionAnalyzer  = VisionAnalyzer()
-    nonisolated let qualityAnalyzer = QualityAnalyzer()
-    nonisolated let videoAnalyzer   = VideoAnalyzer()
-    nonisolated let clusterer       = DuplicateClusterer()
-    nonisolated let junkGrouper     = JunkGrouper()
+    private let hashAnalyzer    = HashAnalyzer()
+    private let visionAnalyzer  = VisionAnalyzer()
+    private let qualityAnalyzer = QualityAnalyzer()
+    private let videoAnalyzer   = VideoAnalyzer()
+    private let clusterer       = DuplicateClusterer()
+    private let junkGrouper     = JunkGrouper()
 
     private var scanTask: Task<Void, Never>?
 
