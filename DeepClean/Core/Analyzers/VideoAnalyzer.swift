@@ -29,7 +29,7 @@ actor VideoAnalyzer {
 
         let duration = asset.duration
         let isAccidental = duration < accidentalDurationThreshold
-        let isScreenRecording = asset.mediaSubtypes.contains(.videoScreenRecording)
+        let isScreenRecording = Self.isScreenRecording(asset: asset)
         let resources = PHAssetResource.assetResources(for: asset)
         let fileSize = resources.first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
 
@@ -91,7 +91,15 @@ actor VideoAnalyzer {
     }
 
     func screenRecordings(assets: [PHAsset]) -> [PHAsset] {
-        assets.filter { $0.mediaType == .video && $0.mediaSubtypes.contains(.videoScreenRecording) }
+        assets.filter { $0.mediaType == .video && Self.isScreenRecording(asset: $0) }
+    }
+
+    // Screen recordings are saved by ReplayKit with filenames like "RPReplay_Final...mp4"
+    private static func isScreenRecording(asset: PHAsset) -> Bool {
+        PHAssetResource.assetResources(for: asset).contains { resource in
+            let name = resource.originalFilename.lowercased()
+            return name.hasPrefix("rpreplay_") || name.contains("screen recording")
+        }
     }
 
     // MARK: - Clustering

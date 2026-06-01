@@ -46,7 +46,7 @@ actor VisionAnalyzer {
         var requests: [VNRequest] = [fpRequest, classifyRequest, textRequest, faceRequest]
 
         var aestheticsRequest: VNRequest?
-        if #available(iOS 17.0, *) {
+        if #available(iOS 18.0, *) {
             let ar = VNGenerateImageAestheticsScoresRequest()
             aestheticsRequest = ar
             requests.append(ar)
@@ -57,15 +57,15 @@ actor VisionAnalyzer {
         // Feature print
         result.featurePrint = fpRequest.results?.first as? VNFeaturePrintObservation
 
-        // Aesthetics
-        if #available(iOS 17.0, *),
+        // Aesthetics (iOS 18+)
+        if #available(iOS 18.0, *),
            let obs = aestheticsRequest?.results?.first as? VNImageAestheticsScoresObservation {
             result.aestheticsScore = obs.overallScore
             result.isUtility = obs.isUtility
         }
 
         // Classifications
-        if let obs = classifyRequest.results as? [VNClassificationObservation] {
+        if let obs = classifyRequest.results {
             result.classifications = obs.filter { $0.confidence > 0.3 }.map(\.identifier)
 
             let bodyPartLabels: Set<String> = ["beard", "face", "hand", "ear", "eye", "neck",
@@ -82,10 +82,10 @@ actor VisionAnalyzer {
         }
 
         // Text detection
-        result.hasText = ((textRequest.results as? [VNTextObservation])?.count ?? 0) > 3
+        result.hasText = (textRequest.results?.count ?? 0) > 3
 
         // Faces
-        if let faces = faceRequest.results as? [VNFaceObservation] {
+        if let faces = faceRequest.results {
             result.faceCount = faces.count
             if !faces.isEmpty {
                 result.bestFaceQuality = assessFaceQuality(faces: faces, in: cgImage)
@@ -134,7 +134,7 @@ actor VisionAnalyzer {
         guard points.count >= 6 else { return 0.2 }
         let topY    = (points[1].y + points[2].y + points[3].y) / 3
         let bottomY = (points[4].y + points[5].y) / 2
-        return abs(topY - bottomY)
+        return Float(abs(topY - bottomY))
     }
 
     // MARK: - Feature Print Distance
