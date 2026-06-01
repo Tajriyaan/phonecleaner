@@ -92,14 +92,14 @@ final class ScanEngine: ObservableObject {
             // ── 2. Load library ─────────────────────────────────────────────
             scanState.update(phase: .loadingLibrary)
             let allPHAssets = loadAllAssets()
-            let albumMap    = buildAlbumMap()
+            // Skip full albumMap build (O(albums × photos)) — too slow for large libraries.
+            // Only fetch WhatsApp IDs which is a small targeted query.
             let whatsAppIDs = whatsAppAssetIDs()
             scanResult.totalAssetsScanned = allPHAssets.count
 
             let assets: [MediaAsset] = allPHAssets.map { ph in
                 let ma = MediaAsset(phAsset: ph)
-                ma.sourceAlbums = albumMap[ph.localIdentifier] ?? []
-                ma.isWhatsApp   = whatsAppIDs.contains(ph.localIdentifier)
+                ma.isWhatsApp = whatsAppIDs.contains(ph.localIdentifier)
                 return ma
             }
 
@@ -119,23 +119,30 @@ final class ScanEngine: ObservableObject {
             )
             guard !Task.isCancelled else { return }
 
-            // Cluster duplicates immediately and publish — user can start deleting now
+            // Publish ONLY exact hash duplicates immediately (O(n) — instant).
+            // Skip O(n²) feature-print clustering here — that runs once at the end
+            // with full Vision data. Doing it now would block Vision from starting.
             let photoAssets = assets.filter { $0.phAsset.mediaType == .image }
-            let quickDuplicates = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
-            scanResult.groups = quickDuplicates
-            scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
-            result = scanResult                          // ← FIRST PUBLISH
-            ScanPersistence.shared.save(scanResult)     // ← cache phase 1
+            let assetByID = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+            let quickGroups: [MediaGroup] = hashGroups.compactMap { _, phAssets in
+                guard phAssets.count > 1 else { return nil }
+                let mediaAssets = phAssets.compactMap { assetByID[$0.localIdentifier] }
+                guard mediaAssets.count > 1 else { return nil }
+                return MediaGroup(groupType: .duplicates(.exactDuplicate),
+                                  assets: mediaAssets,
+                                  confidence: .safeToDelete,
+                                  estimatedSizeMB: sizeMB(phAssets))
+            }
+            scanResult.groups = quickGroups
+            scanResult.estimatedSavingsBytes = computeSavings(groups: quickGroups)
+            result = scanResult                          // ← FIRST PUBLISH (instant)
+            ScanPersistence.shared.save(scanResult)
 
             // ── 4. PHASE 2: AI Vision + Quality (batched, memory-safe) ──────
-            // Runs in background while user reviews phase 1 results.
-            // Publishes updated groups every 50 photos.
             scanState.update(phase: .visionAnalysis, processed: 0, total: assets.count)
             var visionResults: [String: VisionAnalyzer.VisionResult] = [:]
-            // 6 concurrent Vision requests — small enough to avoid memory pressure
-            // while still being faster than sequential. Each task has an 8s timeout
-            // so a stuck asset never blocks the whole scan.
-            let batchSize = 6
+            // 10 concurrent, 3s timeout — faster than 6+8s, handles stuck assets quickly
+            let batchSize = 10
             var processed = 0
 
             for batchStart in stride(from: 0, to: assets.count, by: batchSize) {

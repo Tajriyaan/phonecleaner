@@ -33,9 +33,9 @@ actor VisionAnalyzer {
     // MARK: - Full Analysis (with timeout)
 
     func analyse(asset: PHAsset) async -> VisionResult {
-        // 8-second timeout per photo prevents hanging on HEIF, RAW, or
-        // corrupted assets whose PHImageManager callback never fires.
-        return await withTimeout(seconds: 8, default: VisionResult()) {
+        // 3-second timeout per photo — generous for cached thumbnails (~0.5s),
+        // still catches stuck HEIF/RAW/corrupted assets without wasting time.
+        return await withTimeout(seconds: 3, default: VisionResult()) {
             guard let image = await self.loadThumbnail(asset: asset),
                   let cgImage = image.cgImage else { return VisionResult() }
             return self.runVisionRequests(on: cgImage, asset: asset)
