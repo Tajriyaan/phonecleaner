@@ -100,9 +100,15 @@ struct ScanProgressView: View {
             .padding(Theme.Spacing.lg)
         }
         .onAppear {
-            // Start scan here so the view is fully rendered first
             if !scanEngine.isScanning {
                 scanEngine.startScan()
+            }
+        }
+        .onChange(of: scanEngine.result) { newResult in
+            // Auto-dismiss once first results arrive so user can start reviewing
+            // while deeper analysis continues in the background
+            if newResult != nil && scanEngine.isScanning {
+                dismiss()
             }
         }
     }

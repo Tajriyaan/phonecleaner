@@ -85,11 +85,11 @@ final class ScanEngine: ObservableObject {
         let start = Date()
 
         do {
-            // 1. Permissions
+            // ── 1. Permissions ──────────────────────────────────────────────
             scanState.update(phase: .requestingAccess)
             try await requestPhotoAccess()
 
-            // 2. Load library
+            // ── 2. Load library ─────────────────────────────────────────────
             scanState.update(phase: .loadingLibrary)
             let allPHAssets = loadAllAssets()
             let albumMap    = buildAlbumMap()
@@ -103,7 +103,9 @@ final class ScanEngine: ObservableObject {
                 return ma
             }
 
-            // 3. Hash (exact duplicates)
+            // ── 3. PHASE 1: Exact duplicates (fast — EXIF + thumbnail hash) ─
+            // Runs in seconds. Publishes first results immediately so user
+            // can start reviewing while deeper analysis continues.
             scanState.update(phase: .hashingAssets, processed: 0, total: assets.count)
             let hashGroups = await hashAnalyzer.batchHash(
                 assets: allPHAssets,
@@ -117,10 +119,17 @@ final class ScanEngine: ObservableObject {
             )
             guard !Task.isCancelled else { return }
 
-            // 4 + 5. Vision analysis + quality scoring — batched to prevent OOM crash.
-            // Running all photos concurrently exhausts RAM on large libraries.
-            // Process in batches of 8: each batch loads thumbnails, runs Vision,
-            // scores quality, then releases memory before the next batch.
+            // Cluster duplicates immediately and publish — user can start deleting now
+            let photoAssets = assets.filter { $0.phAsset.mediaType == .image }
+            let quickDuplicates = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
+            scanResult.groups = quickDuplicates
+            scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
+            result = scanResult                          // ← FIRST PUBLISH
+            ScanPersistence.shared.save(scanResult)     // ← cache phase 1
+
+            // ── 4. PHASE 2: AI Vision + Quality (batched, memory-safe) ──────
+            // Runs in background while user reviews phase 1 results.
+            // Publishes updated groups every 50 photos.
             scanState.update(phase: .visionAnalysis, processed: 0, total: assets.count)
             var visionResults: [String: VisionAnalyzer.VisionResult] = [:]
             let batchSize = 8
@@ -130,7 +139,6 @@ final class ScanEngine: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let batch = Array(assets[batchStart..<min(batchStart + batchSize, assets.count)])
 
-                // Vision pass for this batch
                 await withTaskGroup(of: (String, VisionAnalyzer.VisionResult).self) { group in
                     for asset in batch {
                         group.addTask {
@@ -142,11 +150,13 @@ final class ScanEngine: ObservableObject {
                         visionResults[id] = vr
                         processed += 1
                         let p = processed, t = assets.count
-                        await MainActor.run { self.scanState.update(phase: .visionAnalysis, processed: p, total: t) }
+                        await MainActor.run {
+                            self.scanState.update(phase: .visionAnalysis, processed: p, total: t)
+                        }
                     }
                 }
 
-                // Apply vision + quality score immediately for this batch, then release
+                // Apply Vision + quality scores, release memory
                 for asset in batch {
                     if let vr = visionResults[asset.id] {
                         asset.featurePrint    = vr.featurePrint
@@ -157,43 +167,61 @@ final class ScanEngine: ObservableObject {
                             asset: asset.phAsset, visionResult: vr)
                     }
                 }
-                // Release batch thumbnails from memory
                 for asset in batch { visionResults.removeValue(forKey: asset.id) }
-            }
-            // 6. Video analysis
-            let videoAssets = allPHAssets.filter { $0.mediaType == .video }
-            if !videoAssets.isEmpty {
-                scanState.update(phase: .videoAnalysis, processed: 0, total: videoAssets.count)
-                let videoGroups = await buildVideoGroups(videoAssets: videoAssets)
-                scanResult.groups.append(contentsOf: videoGroups)
+
+                // Publish updated results every 50 photos so dashboard stays live
+                if processed % 50 == 0 || batchStart + batchSize >= assets.count {
+                    let updatedDupes = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
+                    let junkSoFar   = junkGrouper.group(assets: photoAssets)
+                    scanResult.groups = updatedDupes + junkSoFar
+                    scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
+                    result = scanResult                  // ← LIVE UPDATE
+                }
             }
             guard !Task.isCancelled else { return }
 
-            // 7. Photo clustering (duplicates + similar)
-            scanState.update(phase: .clustering)
-            let photoAssets = assets.filter { $0.phAsset.mediaType == .image }
-            let duplicateGroups = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
-            scanResult.groups.append(contentsOf: duplicateGroups)
+            // ── 5. PHASE 3: Video analysis ───────────────────────────────────
+            scanState.update(phase: .videoAnalysis, processed: 0, total: 0)
+            let videoAssets = allPHAssets.filter { $0.mediaType == .video }
+            if !videoAssets.isEmpty {
+                let videoGroups = await buildVideoGroups(videoAssets: videoAssets)
+                scanResult.groups.append(contentsOf: videoGroups)
+                result = scanResult                      // ← PUBLISH video results
+            }
+            guard !Task.isCancelled else { return }
 
-            // 8. Junk detection
+            // ── 6. PHASE 4: Junk detection (final pass with full quality data) ─
             scanState.update(phase: .junkDetection)
-            let junkGroups = junkGrouper.group(assets: photoAssets)
-            scanResult.groups.append(contentsOf: junkGroups)
+            let finalJunk = junkGrouper.group(assets: photoAssets)
 
-            // 9. iCloud / WhatsApp stats
+            // ── 7. Final clustering with all Vision data ─────────────────────
+            scanState.update(phase: .clustering)
+            let finalDuplicates = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
+
+            // ── 8. iCloud stats ──────────────────────────────────────────────
             scanState.update(phase: .icloudCheck)
             scanResult.iCloudOnlyCount = assets.filter(\.isCloudOnly).count
             scanResult.whatsAppCount   = assets.filter(\.isWhatsApp).count
 
-            // 10. Finalise
+            // ── 9. Finalise ──────────────────────────────────────────────────
             scanState.update(phase: .finalising)
+            scanResult.groups = finalDuplicates + finalJunk
+            if !videoAssets.isEmpty {
+                let videoGroups = scanResult.groups.filter {
+                    if case .junk(let j) = $0.groupType {
+                        return j == .accidentalShot || j == .screenRecording
+                    }
+                    if case .duplicates(let d) = $0.groupType { return d == .nearDuplicate }
+                    return false
+                }
+                scanResult.groups = finalDuplicates + finalJunk + videoGroups
+            }
             scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
             scanResult.scanDuration = Date().timeIntervalSince(start)
 
             scanState.phase = .complete
             result = scanResult
             isScanning = false
-            // Save results + library change token — next launch detects no change
             ScanPersistence.shared.save(scanResult)
             saveChangeToken()
 

@@ -19,12 +19,17 @@ struct DashboardView: View {
                         headerSection
                         storageRingSection
 
+                        // Scanning-in-progress banner
+                        if scanEngine.isScanning {
+                            scanningBanner
+                        }
+
                         if let result = scanEngine.result {
                             scanSummarySection(result: result)
                             categoryCardsSection(result: result)
                             reviewButton
                                 .onTapGesture { showingReview = true }
-                        } else {
+                        } else if !scanEngine.isScanning {
                             scanPromptSection
                         }
 
@@ -59,6 +64,35 @@ struct DashboardView: View {
                     .environmentObject(scanEngine)
             }
         }
+    }
+
+    // MARK: - Scanning Banner
+
+    private var scanningBanner: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            ProgressView()
+                .tint(Theme.Colors.accent)
+                .scaleEffect(0.8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scanEngine.scanState.phase.rawValue)
+                    .font(Theme.Typography.caption)
+                    .foregroundColor(Theme.Colors.textPrimary)
+                Text("More items being found — you can review what's ready now")
+                    .font(Theme.Typography.tiny)
+                    .foregroundColor(Theme.Colors.textSecondary)
+            }
+            Spacer()
+            if scanEngine.scanState.totalCount > 0 {
+                Text("\(scanEngine.scanState.progressPercent)%")
+                    .font(Theme.Typography.tiny)
+                    .foregroundColor(Theme.Colors.accent)
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(Theme.Colors.accent.opacity(0.1))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md)
+            .stroke(Theme.Colors.accent.opacity(0.3), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
     // MARK: - Permission Request
