@@ -141,7 +141,7 @@ struct ReviewView: View {
     private func groupRow(group: MediaGroup) -> some View {
         Button { selectedGroup = group } label: {
             HStack(spacing: Theme.Spacing.md) {
-                // Thumbnail stack
+                // Single thumbnail only — lazy loaded, no stack overhead
                 thumbnailStack(group: group)
 
                 // Info
@@ -172,16 +172,15 @@ struct ReviewView: View {
     // MARK: - Thumbnail Stack
 
     private func thumbnailStack(group: MediaGroup) -> some View {
-        ZStack {
-            ForEach(Array(group.assets.prefix(3).enumerated()), id: \.element.id) { i, asset in
-                PhotoThumbnailView(asset: asset.phAsset)
-                    .frame(width: 52, height: 52)
+        // Single thumbnail — stacking 3 was causing slow scrolling
+        Group {
+            if let first = group.assets.first {
+                PhotoThumbnailView(asset: first.phAsset)
+                    .frame(width: 56, height: 56)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                    .offset(x: CGFloat(i) * 8, y: CGFloat(i) * -3)
-                    .zIndex(Double(3 - i))
             }
         }
-        .frame(width: 72, height: 60)
+        .frame(width: 56, height: 56)
     }
 
     // MARK: - Delete Button

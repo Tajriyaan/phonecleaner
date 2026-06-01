@@ -169,11 +169,10 @@ final class ScanEngine: ObservableObject {
                 }
                 for asset in batch { visionResults.removeValue(forKey: asset.id) }
 
-                // Publish updated results every 50 photos so dashboard stays live
-                if processed % 50 == 0 || batchStart + batchSize >= assets.count {
+                // Publish updated results every 200 photos (not too frequent — clustering is expensive)
+                if processed % 200 == 0 || batchStart + batchSize >= assets.count {
                     let updatedDupes = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
-                    let junkSoFar   = junkGrouper.group(assets: photoAssets)
-                    scanResult.groups = updatedDupes + junkSoFar
+                    scanResult.groups = updatedDupes
                     scanResult.estimatedSavingsBytes = computeSavings(groups: scanResult.groups)
                     result = scanResult                  // ← LIVE UPDATE
                 }

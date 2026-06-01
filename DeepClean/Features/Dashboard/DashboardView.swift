@@ -28,7 +28,6 @@ struct DashboardView: View {
                             scanSummarySection(result: result)
                             categoryCardsSection(result: result)
                             reviewButton
-                                .onTapGesture { showingReview = true }
                         } else if !scanEngine.isScanning {
                             scanPromptSection
                         }
@@ -266,15 +265,17 @@ struct DashboardView: View {
 
     private var reviewButton: some View {
         VStack(spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "checkmark.circle.fill")
-                Text("Review & Clean").font(Theme.Typography.headline)
+            Button { showingReview = true } label: {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text("Review & Clean").font(Theme.Typography.headline)
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(Theme.Spacing.md)
+                .background(Theme.Gradients.accent)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
             }
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(Theme.Spacing.md)
-            .background(Theme.Gradients.accent)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
 
             Button {
                 ScanPersistence.shared.clear()
