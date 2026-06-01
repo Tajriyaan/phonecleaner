@@ -191,7 +191,7 @@ struct JunkGrouper {
         add(&groups, type: .slowMotion, assets: slowmo, usedIDs: &usedIDs)
 
         // Time-lapse
-        let timelapse = assets.filter { $0.phAsset.mediaSubtypes.contains(.videoTimeLapse) }
+        let timelapse = assets.filter { $0.phAsset.mediaSubtypes.contains(.videoTimelapse) }
         add(&groups, type: .timeLapse, assets: timelapse, usedIDs: &usedIDs)
 
         // Live Photo video clips (the .mov component saved separately)
@@ -258,7 +258,7 @@ struct JunkGrouper {
         return groups.sorted { $0.estimatedSizeMB > $1.estimatedSizeMB }
     }
 
-    private mutating func add(_ groups: inout [MediaGroup],
+    private func add(_ groups: inout [MediaGroup],
                                type: JunkType,
                                assets: [MediaAsset],
                                usedIDs: inout Set<String>) {
