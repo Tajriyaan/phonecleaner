@@ -59,7 +59,7 @@ actor VisionAnalyzer {
 
     // MARK: - Vision Pipeline (iOS 26 compatible)
 
-    private func runVisionRequests(on cgImage: CGImage, asset: PHAsset) -> VisionResult {
+    private nonisolated func runVisionRequests(on cgImage: CGImage, asset: PHAsset) -> VisionResult {
         var result = VisionResult()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
 
@@ -107,7 +107,7 @@ actor VisionAnalyzer {
 
     // MARK: - Face Quality
 
-    private func assessFaceQuality(faces: [VNFaceObservation], in cgImage: CGImage) -> Float {
+    private nonisolated func assessFaceQuality(faces: [VNFaceObservation], in cgImage: CGImage) -> Float {
         guard let largest = faces.max(by: {
             $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height
         }) else { return 0 }
@@ -136,7 +136,7 @@ actor VisionAnalyzer {
         return eyeScore * 0.4 + sharpness * 0.6
     }
 
-    private func eyeOpenness(_ landmark: VNFaceLandmarkRegion2D) -> Float {
+    private nonisolated func eyeOpenness(_ landmark: VNFaceLandmarkRegion2D) -> Float {
         let points = landmark.normalizedPoints
         guard points.count >= 6 else { return 0.2 }
         let topY    = (points[1].y + points[2].y + points[3].y) / 3
@@ -154,7 +154,7 @@ actor VisionAnalyzer {
 
     // MARK: - Laplacian Sharpness
 
-    func laplacianSharpness(of cgImage: CGImage) -> Float {
+    nonisolated func laplacianSharpness(of cgImage: CGImage) -> Float {
         guard let provider = cgImage.dataProvider,
               let cfData   = provider.data,
               let ptr       = CFDataGetBytePtr(cfData) else { return 0 }
