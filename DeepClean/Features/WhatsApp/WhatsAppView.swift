@@ -299,8 +299,15 @@ final class WhatsAppViewModel: ObservableObject {
         let apps = await MainActor.run { WhatsAppAnalyzer.installedApps() }
         await MainActor.run {
             installedApps = apps
-            if apps.count > 1 { selectedApp = .both }
-            else if let first = apps.first { selectedApp = first }
+            // Default to Both if both installed, otherwise whichever is present
+            // Prefer regular WhatsApp as the default single-app selection
+            if apps.count > 1 {
+                selectedApp = .both
+            } else if apps.contains(.whatsApp) {
+                selectedApp = .whatsApp
+            } else if apps.contains(.whatsAppBusiness) {
+                selectedApp = .whatsAppBusiness
+            }
         }
     }
 

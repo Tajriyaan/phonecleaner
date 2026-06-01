@@ -173,16 +173,6 @@ final class ScanEngine: ObservableObject {
                 }
                 for asset in batch { visionResults.removeValue(forKey: asset.id) }
 
-                // Save partial results every 100 photos so user has something
-                // to review even if scan stops early (memory pressure / timeout)
-                if processed % 100 == 0 {
-                    let partial = clusterer.cluster(assets: photoAssets, hashGroups: hashGroups)
-                    scanResult.groups = partial
-                    scanResult.estimatedSavingsBytes = computeSavings(groups: partial)
-                    result = scanResult
-                    ScanPersistence.shared.save(scanResult)
-                }
-
                 // Yield to system between batches to reduce memory pressure
                 await Task.yield()
             }
