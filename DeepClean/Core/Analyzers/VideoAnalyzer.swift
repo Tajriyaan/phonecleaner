@@ -149,7 +149,8 @@ actor VideoAnalyzer {
                     return
                 }
 
-                let duration = CMTimeGetSeconds(avAsset.duration)
+                let durationValue = try? await avAsset.load(.duration)
+                let duration = durationValue.map { CMTimeGetSeconds($0) } ?? 0
                 let generator = AVAssetImageGenerator(asset: avAsset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 256, height: 256)

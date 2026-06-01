@@ -68,7 +68,10 @@ final class MediaGroup: Identifiable, ObservableObject, Hashable {
 
 // MARK: - Scan Result
 
-struct ScanResult {
+struct ScanResult: Equatable {
+    static func == (lhs: ScanResult, rhs: ScanResult) -> Bool {
+        lhs.groups.map(\.id) == rhs.groups.map(\.id)
+    }
     var groups: [MediaGroup] = []
     var totalAssetsScanned: Int = 0
     var iCloudOnlyCount: Int = 0
