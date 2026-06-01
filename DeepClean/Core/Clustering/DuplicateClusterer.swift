@@ -3,94 +3,74 @@ import Photos
 import Vision
 
 // MARK: - Duplicate Clusterer
-// Groups MediaAssets into clusters by exact hash, near-duplicate feature prints,
-// and temporal burst proximity. Handles WhatsApp and cross-album detection.
 
 struct DuplicateClusterer {
 
-    // Feature print distance thresholds
-    static let exactDuplicateThreshold: Float = 0.05
-    static let nearDuplicateThreshold: Float  = 0.25
-    static let similarShotThreshold: Float    = 0.45
-
-    // Burst: >2 photos within this window
+    static let nearDuplicateThreshold: Float = 0.25
+    static let similarShotThreshold: Float   = 0.45
     static let burstTimeWindowSeconds: Double = 2.0
 
-    // MARK: - Main Cluster Entry Point
+    // MARK: - Cluster Entry Point
 
-    func cluster(
-        assets: [MediaAsset],
-        hashGroups: [String: [PHAsset]]
-    ) -> [MediaGroup] {
-
+    func cluster(assets: [MediaAsset], hashGroups: [String: [PHAsset]]) -> [MediaGroup] {
         var groups: [MediaGroup] = []
         var usedIDs = Set<String>()
 
+        // Map PHAsset.localIdentifier → MediaAsset
         let assetMap = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
 
-        // 1. Exact hash duplicates
+        // 1. Exact hash groups
         for (_, phAssets) in hashGroups where phAssets.count > 1 {
+            // phAssets use localIdentifier which == MediaAsset.id
             let mediaAssets = phAssets.compactMap { assetMap[$0.localIdentifier] }
             guard mediaAssets.count > 1 else { continue }
 
-            let hasWhatsApp = mediaAssets.contains(\.isWhatsApp)
-            let type: SimilarityType = hasWhatsApp ? .whatsAppDuplicate : .exactDuplicate
-            let crossAlbum = Set(mediaAssets.flatMap(\.sourceAlbums)).count > 1
+            let hasWhatsApp   = mediaAssets.contains { $0.isWhatsApp }
+            let crossAlbum    = Set(mediaAssets.flatMap(\.sourceAlbums)).count > 1
+            let type: SimilarityType = crossAlbum ? .crossAlbumDuplicate
+                                     : hasWhatsApp ? .whatsAppDuplicate
+                                     : .exactDuplicate
 
-            let finalType: SimilarityType = crossAlbum ? .crossAlbumDuplicate : type
-            let sizeMB = estimatedSizeMB(assets: mediaAssets)
-
-            let group = MediaGroup(
-                groupType: .duplicates(finalType),
+            groups.append(MediaGroup(
+                groupType: .duplicates(type),
                 assets: mediaAssets,
-                confidence: finalType.confidence,
-                estimatedSizeMB: sizeMB
-            )
-            groups.append(group)
+                confidence: type.confidence,
+                estimatedSizeMB: sizeMB(mediaAssets)
+            ))
             mediaAssets.forEach { usedIDs.insert($0.id) }
         }
 
-        // 2. Feature print similarity clustering (unused assets only)
+        // 2. Feature print similarity (remaining assets)
         let remaining = assets.filter { !usedIDs.contains($0.id) && $0.featurePrint != nil }
-        let featureGroups = featurePrintClusters(assets: remaining)
-
-        for cluster in featureGroups {
+        for cluster in featurePrintClusters(assets: remaining) {
             guard cluster.count > 1 else { continue }
-
             let dist = averageDistance(cluster)
-            let type: SimilarityType = dist < nearDuplicateThreshold ? .nearDuplicate : .similarShot
-            let confidence = type.confidence
-
-            let group = MediaGroup(
+            let type: SimilarityType = dist < Self.nearDuplicateThreshold ? .nearDuplicate : .similarShot
+            groups.append(MediaGroup(
                 groupType: .duplicates(type),
                 assets: cluster,
-                confidence: confidence,
-                estimatedSizeMB: estimatedSizeMB(assets: cluster)
-            )
-            groups.append(group)
+                confidence: type.confidence,
+                estimatedSizeMB: sizeMB(cluster)
+            ))
             cluster.forEach { usedIDs.insert($0.id) }
         }
 
-        // 3. Burst sequences (temporal clustering on remaining assets)
+        // 3. Burst sequences
         let afterFeature = assets.filter { !usedIDs.contains($0.id) }
-        let bursts = burstClusters(assets: afterFeature)
-
-        for burst in bursts {
-            guard burst.count > 2 else { continue }
-            let group = MediaGroup(
+        for burst in burstClusters(assets: afterFeature) where burst.count > 2 {
+            groups.append(MediaGroup(
                 groupType: .duplicates(.burstSequence),
                 assets: burst,
                 confidence: .safeToDelete,
-                estimatedSizeMB: estimatedSizeMB(assets: burst)
-            )
-            groups.append(group)
+                estimatedSizeMB: sizeMB(burst)
+            ))
             burst.forEach { usedIDs.insert($0.id) }
         }
 
         return groups.sorted { $0.estimatedSizeMB > $1.estimatedSizeMB }
     }
 
-    // MARK: - Feature Print Clustering (greedy nearest-neighbour)
+    // MARK: - Feature Print Clustering (greedy)
 
     private func featurePrintClusters(assets: [MediaAsset]) -> [[MediaAsset]] {
         var clusters: [[MediaAsset]] = []
@@ -103,13 +83,12 @@ struct DuplicateClusterer {
             var cluster = [a]
             assigned.insert(a.id)
 
-            for j in (i+1)..<assets.count {
+            for j in (i + 1)..<assets.count {
                 let b = assets[j]
                 guard !assigned.contains(b.id), let fpB = b.featurePrint else { continue }
 
                 var dist: Float = 0
                 try? fpA.computeDistance(&dist, to: fpB)
-
                 if dist < Self.similarShotThreshold {
                     cluster.append(b)
                     assigned.insert(b.id)
@@ -118,7 +97,6 @@ struct DuplicateClusterer {
 
             if cluster.count > 1 { clusters.append(cluster) }
         }
-
         return clusters
     }
 
@@ -130,36 +108,35 @@ struct DuplicateClusterer {
             .sorted { ($0.phAsset.creationDate ?? .distantPast) < ($1.phAsset.creationDate ?? .distantPast) }
 
         var clusters: [[MediaAsset]] = []
-        var currentBurst: [MediaAsset] = []
+        var current: [MediaAsset] = []
 
         for asset in sorted {
-            if currentBurst.isEmpty {
-                currentBurst.append(asset)
-                continue
+            if current.isEmpty {
+                current.append(asset); continue
             }
-            let last = currentBurst.last!
-            let gap = asset.phAsset.creationDate?.timeIntervalSince(last.phAsset.creationDate ?? .distantPast) ?? 999
+            let prev = current.last!
+            let gap  = asset.phAsset.creationDate?
+                .timeIntervalSince(prev.phAsset.creationDate ?? .distantPast) ?? 999
             if gap <= Self.burstTimeWindowSeconds {
-                currentBurst.append(asset)
+                current.append(asset)
             } else {
-                if currentBurst.count > 2 { clusters.append(currentBurst) }
-                currentBurst = [asset]
+                if current.count > 2 { clusters.append(current) }
+                current = [asset]
             }
         }
-        if currentBurst.count > 2 { clusters.append(currentBurst) }
-
+        if current.count > 2 { clusters.append(current) }
         return clusters
     }
 
     // MARK: - Helpers
 
     private func averageDistance(_ assets: [MediaAsset]) -> Float {
-        guard assets.count > 1 else { return 0 }
         var total: Float = 0
         var count = 0
         for i in 0..<assets.count {
-            for j in (i+1)..<assets.count {
-                guard let a = assets[i].featurePrint, let b = assets[j].featurePrint else { continue }
+            for j in (i + 1)..<assets.count {
+                guard let a = assets[i].featurePrint,
+                      let b = assets[j].featurePrint else { continue }
                 var dist: Float = 0
                 try? a.computeDistance(&dist, to: b)
                 total += dist
@@ -169,10 +146,10 @@ struct DuplicateClusterer {
         return count > 0 ? total / Float(count) : 0
     }
 
-    private func estimatedSizeMB(assets: [MediaAsset]) -> Double {
+    private func sizeMB(_ assets: [MediaAsset]) -> Double {
         assets.reduce(0.0) { acc, a in
-            let resources = PHAssetResource.assetResources(for: a.phAsset)
-            let bytes = resources.first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            let bytes = PHAssetResource.assetResources(for: a.phAsset)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
             return acc + Double(bytes) / 1_048_576
         }
     }
@@ -185,69 +162,44 @@ struct JunkGrouper {
     func group(assets: [MediaAsset]) -> [MediaGroup] {
         var groups: [MediaGroup] = []
 
-        // Screenshots
-        let screenshots = assets.filter { $0.qualityScore?.isUtility == true && !$0.qualityScore!.hasBlur }
+        let screenshots = assets.filter { $0.qualityScore?.isUtility == true }
         if !screenshots.isEmpty {
-            groups.append(MediaGroup(
-                groupType: .junk(.screenshot),
-                assets: screenshots,
-                confidence: .reviewRecommended,
-                estimatedSizeMB: sizeMB(screenshots)
-            ))
+            groups.append(make(.junk(.screenshot), assets: screenshots, confidence: .reviewRecommended))
         }
 
-        // Blurry
-        let blurry = assets.filter { $0.qualityScore?.hasBlur == true && $0.qualityScore?.isUtility == false }
+        let blurry = assets.filter { $0.qualityScore?.hasBlur == true && $0.qualityScore?.isUtility != true }
         if !blurry.isEmpty {
-            groups.append(MediaGroup(
-                groupType: .junk(.blurry),
-                assets: blurry,
-                confidence: .safeToDelete,
-                estimatedSizeMB: sizeMB(blurry)
-            ))
+            groups.append(make(.junk(.blurry), assets: blurry, confidence: .safeToDelete))
         }
 
-        // Junk shots (accidental / body parts)
-        let junk = assets.filter { $0.qualityScore?.isJunkShot == true && $0.qualityScore?.hasBlur == false }
+        let junk = assets.filter {
+            $0.qualityScore?.isJunkShot == true && $0.qualityScore?.hasBlur != true
+        }
         if !junk.isEmpty {
-            groups.append(MediaGroup(
-                groupType: .junk(.accidentalShot),
-                assets: junk,
-                confidence: .safeToDelete,
-                estimatedSizeMB: sizeMB(junk)
-            ))
+            groups.append(make(.junk(.accidentalShot), assets: junk, confidence: .safeToDelete))
         }
 
-        // Bad exposure
         let badExposure = assets.filter {
             guard let q = $0.qualityScore else { return false }
             return q.exposure < 0.2 && !q.hasBlur && !q.isUtility && !q.isJunkShot
         }
         if !badExposure.isEmpty {
-            groups.append(MediaGroup(
-                groupType: .junk(.badExposure),
-                assets: badExposure,
-                confidence: .reviewRecommended,
-                estimatedSizeMB: sizeMB(badExposure)
-            ))
+            groups.append(make(.junk(.badExposure), assets: badExposure, confidence: .reviewRecommended))
         }
 
         return groups.sorted { $0.estimatedSizeMB > $1.estimatedSizeMB }
     }
 
+    private func make(_ type: MediaGroup.GroupType, assets: [MediaAsset],
+                      confidence: GroupConfidence) -> MediaGroup {
+        MediaGroup(groupType: type, assets: assets, confidence: confidence, estimatedSizeMB: sizeMB(assets))
+    }
+
     private func sizeMB(_ assets: [MediaAsset]) -> Double {
         assets.reduce(0.0) { acc, a in
-            let res = PHAssetResource.assetResources(for: a.phAsset)
-            let bytes = res.first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
+            let bytes = PHAssetResource.assetResources(for: a.phAsset)
+                .first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
             return acc + Double(bytes) / 1_048_576
         }
-    }
-}
-
-// MARK: - Collection helper
-
-private extension Collection {
-    func contains(_ keyPath: KeyPath<Element, Bool>) -> Bool {
-        contains { $0[keyPath: keyPath] }
     }
 }

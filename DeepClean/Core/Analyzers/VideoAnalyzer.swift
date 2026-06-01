@@ -4,18 +4,12 @@ import Vision
 import AVFoundation
 
 // MARK: - Video Analyzer
-// Detects duplicate and similar video clips by:
-//   1. SHA256 of raw video data (exact match)
-//   2. Frame fingerprinting at regular intervals (visual similarity)
-//   3. Metadata heuristics (duration, resolution, accidental clip detection)
 
 actor VideoAnalyzer {
 
-    private let imageManager = PHImageManager.default()
-    private let frameCount = 6         // frames to sample per video
-    private let thumbnailSize = CGSize(width: 256, height: 256)
+    private let frameCount = 6
     private let similarityThreshold: Float = 0.45
-    private let accidentalDurationThreshold: Double = 3.0  // seconds
+    private let accidentalDurationThreshold: Double = 3.0
 
     // MARK: - Video Fingerprint
 
@@ -36,11 +30,8 @@ actor VideoAnalyzer {
         let duration = asset.duration
         let isAccidental = duration < accidentalDurationThreshold
         let isScreenRecording = asset.mediaSubtypes.contains(.videoScreenRecording)
-
         let resources = PHAssetResource.assetResources(for: asset)
-        let fileSize = resources.first.flatMap {
-            $0.value(forKey: "fileSize") as? Int64
-        } ?? 0
+        let fileSize = resources.first.flatMap { $0.value(forKey: "fileSize") as? Int64 } ?? 0
 
         var fp = VideoFingerprint(
             assetID: asset.localIdentifier,
@@ -51,49 +42,39 @@ actor VideoAnalyzer {
             isScreenRecording: isScreenRecording
         )
 
-        // Sample frames at evenly-spaced intervals
         let frames = await sampleFrames(from: asset, count: frameCount)
         for frame in frames {
-            if let cg = frame.cgImage {
-                let hash = await perceptualHash(cgImage: cg)
-                fp.frameHashes.append(hash)
-
-                let print = await featurePrint(cgImage: cg)
-                if let print { fp.framePrints.append(print) }
+            guard let cg = frame.cgImage else { continue }
+            fp.frameHashes.append(perceptualHash(cgImage: cg))
+            if let print = featurePrint(cgImage: cg) {
+                fp.framePrints.append(print)
             }
         }
-
         return fp
     }
 
-    // MARK: - Similarity Score Between Two Videos
+    // MARK: - Similarity
 
     func similarity(a: VideoFingerprint, b: VideoFingerprint) -> Float {
         guard !a.framePrints.isEmpty && !b.framePrints.isEmpty else { return 0 }
-
-        // Duration difference heuristic
         let durationRatio = min(a.durationSeconds, b.durationSeconds) /
                             max(a.durationSeconds, b.durationSeconds)
         guard durationRatio > 0.7 else { return 0 }
 
-        // Average best-match frame similarity
         var totalSim: Float = 0
         let count = min(a.framePrints.count, b.framePrints.count)
-
         for i in 0..<count {
             var dist: Float = 0
             try? a.framePrints[i].computeDistance(&dist, to: b.framePrints[i])
             totalSim += max(0, 1 - dist)
         }
-
-        return totalSim / Float(count)
+        return count > 0 ? totalSim / Float(count) : 0
     }
 
-    // MARK: - Batch Video Analysis
+    // MARK: - Batch
 
     func groupDuplicateVideos(assets: [PHAsset]) async -> [[PHAsset]] {
         var fingerprints: [VideoFingerprint] = []
-
         await withTaskGroup(of: VideoFingerprint?.self) { group in
             for asset in assets {
                 group.addTask { await self.fingerprint(for: asset) }
@@ -102,7 +83,6 @@ actor VideoAnalyzer {
                 if let fp { fingerprints.append(fp) }
             }
         }
-
         return clusterByVisualSimilarity(fingerprints: fingerprints, allAssets: assets)
     }
 
@@ -116,7 +96,8 @@ actor VideoAnalyzer {
 
     // MARK: - Clustering
 
-    private func clusterByVisualSimilarity(fingerprints: [VideoFingerprint], allAssets: [PHAsset]) -> [[PHAsset]] {
+    private func clusterByVisualSimilarity(fingerprints: [VideoFingerprint],
+                                            allAssets: [PHAsset]) -> [[PHAsset]] {
         let assetMap = Dictionary(uniqueKeysWithValues: allAssets.map { ($0.localIdentifier, $0) })
         var visited = Set<String>()
         var clusters: [[PHAsset]] = []
@@ -128,7 +109,7 @@ actor VideoAnalyzer {
             var cluster = [fp]
             visited.insert(fp.assetID)
 
-            for j in (i+1)..<fingerprints.count {
+            for j in (i + 1)..<fingerprints.count {
                 let other = fingerprints[j]
                 guard !visited.contains(other.assetID) else { continue }
                 if similarity(a: fp, b: other) >= (1 - similarityThreshold) {
@@ -138,15 +119,14 @@ actor VideoAnalyzer {
             }
 
             if cluster.count > 1 {
-                let assets = cluster.compactMap { assetMap[$0.assetID] }
-                clusters.append(assets)
+                let phAssets = cluster.compactMap { assetMap[$0.assetID] }
+                clusters.append(phAssets)
             }
         }
-
         return clusters
     }
 
-    // MARK: - Frame Sampling
+    // MARK: - Frame Sampling (fixed: single continuation resume)
 
     private func sampleFrames(from asset: PHAsset, count: Int) async -> [UIImage] {
         await withCheckedContinuation { continuation in
@@ -155,38 +135,55 @@ actor VideoAnalyzer {
             options.isNetworkAccessAllowed = true
 
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                guard let avAsset else { continuation.resume(returning: []); return }
+                guard let avAsset else {
+                    continuation.resume(returning: [])
+                    return
+                }
 
                 let duration = CMTimeGetSeconds(avAsset.duration)
                 let generator = AVAssetImageGenerator(asset: avAsset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 256, height: 256)
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter  = CMTime(seconds: 1, preferredTimescale: 600)
 
                 var times: [NSValue] = []
-                for i in 0..<count {
-                    let t = duration * Double(i) / Double(count - 1)
-                    times.append(NSValue(time: CMTimeMakeWithSeconds(t, preferredTimescale: 600)))
+                let safeCount = max(1, count)
+                for i in 0..<safeCount {
+                    let t = safeCount == 1 ? duration / 2
+                                           : duration * Double(i) / Double(safeCount - 1)
+                    times.append(NSValue(time: CMTimeMakeWithSeconds(max(0, t), preferredTimescale: 600)))
                 }
 
+                // Collect all frames synchronously then resume once
                 var frames: [UIImage] = []
-                generator.generateCGImagesAsynchronously(forTimes: times) { _, cgImage, _, result, _ in
-                    if result == .succeeded, let cg = cgImage {
+                var remaining = times.count
+
+                for time in times {
+                    var actualTime = CMTime.zero
+                    if let cg = try? generator.copyCGImage(at: time.timeValue, actualTime: &actualTime) {
                         frames.append(UIImage(cgImage: cg))
                     }
-                    if frames.count == count { continuation.resume(returning: frames) }
+                    remaining -= 1
+                    if remaining == 0 {
+                        continuation.resume(returning: frames)
+                    }
+                }
+
+                // Safety: if times was empty
+                if times.isEmpty {
+                    continuation.resume(returning: [])
                 }
             }
         }
     }
 
-    // MARK: - Perceptual Hash (dHash)
+    // MARK: - Hashing
 
-    private func perceptualHash(cgImage: CGImage) async -> String {
+    private func perceptualHash(cgImage: CGImage) -> String {
         guard let ctx = CGContext(
-            data: nil,
-            width: 9, height: 8,
-            bitsPerComponent: 8,
-            bytesPerRow: 9,
+            data: nil, width: 9, height: 8,
+            bitsPerComponent: 8, bytesPerRow: 9,
             space: CGColorSpaceCreateDeviceGray(),
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else { return "" }
@@ -198,15 +195,13 @@ actor VideoAnalyzer {
         var hash = ""
         for y in 0..<8 {
             for x in 0..<8 {
-                let left  = pixels[y * 9 + x]
-                let right = pixels[y * 9 + x + 1]
-                hash += left < right ? "1" : "0"
+                hash += pixels[y * 9 + x] < pixels[y * 9 + x + 1] ? "1" : "0"
             }
         }
         return hash
     }
 
-    private func featurePrint(cgImage: CGImage) async -> VNFeaturePrintObservation? {
+    private func featurePrint(cgImage: CGImage) -> VNFeaturePrintObservation? {
         let req = VNGenerateImageFeaturePrintRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try? handler.perform([req])

@@ -4,26 +4,29 @@ import UIKit
 import Accelerate
 
 // MARK: - Quality Analyzer
-// Computes sharpness, exposure, and noise scores from pixel data.
-// Uses Accelerate for fast histogram and convolution operations.
+// Scores sharpness, exposure, and noise for a photo asset.
+// Uses simple loop-based Laplacian (no unsafe pointer arithmetic).
 
 actor QualityAnalyzer {
 
-    private let imageManager = PHImageManager.default()
     private let sampleSize = CGSize(width: 256, height: 256)
 
     func score(asset: PHAsset, visionResult: VisionAnalyzer.VisionResult) async -> QualityScore {
         guard let image = await loadSample(asset: asset),
               let cgImage = image.cgImage else {
-            return QualityScore(sharpness: 0, exposure: 0, aesthetics: visionResult.aestheticsScore,
-                                faceQuality: visionResult.bestFaceQuality,
-                                noiseLevel: 0, hasBlur: true, isJunkShot: false,
-                                isUtility: visionResult.isUtility)
+            return QualityScore(
+                sharpness: 0, exposure: 0,
+                aesthetics: visionResult.aestheticsScore,
+                faceQuality: visionResult.bestFaceQuality,
+                noiseLevel: 0, hasBlur: true,
+                isJunkShot: false,
+                isUtility: visionResult.isUtility
+            )
         }
 
         let sharpness = computeSharpness(cgImage)
-        let (exposure, noise) = computeExposureAndNoise(cgImage)
-        let hasBlur = sharpness < 0.08
+        let exposure  = computeExposure(cgImage)
+        let hasBlur   = sharpness < 0.08
 
         let isJunkShot = visionResult.isBodyPartShot
                       || visionResult.isAccidentalShot
@@ -34,105 +37,86 @@ actor QualityAnalyzer {
             exposure: exposure,
             aesthetics: visionResult.aestheticsScore,
             faceQuality: visionResult.bestFaceQuality,
-            noiseLevel: noise,
+            noiseLevel: 0,
             hasBlur: hasBlur,
             isJunkShot: isJunkShot,
             isUtility: visionResult.isUtility
         )
     }
 
-    // MARK: - Sharpness (Laplacian variance via vDSP)
+    // MARK: - Sharpness via Laplacian variance (pure Swift, no unsafe pointers)
 
     private func computeSharpness(_ cgImage: CGImage) -> Float {
-        guard let pixels = grayPixels(cgImage) else { return 0 }
+        guard let pixels = grayFloatPixels(cgImage) else { return 0 }
         let w = cgImage.width
         let h = cgImage.height
         guard w > 2 && h > 2 else { return 0 }
 
-        // Laplacian kernel: [0,1,0 / 1,-4,1 / 0,1,0]
-        var output = [Float](repeating: 0, count: pixels.count)
-        let kernel: [Float] = [0, 1, 0, 1, -4, 1, 0, 1, 0]
+        var sum: Float = 0
+        var sumSq: Float = 0
+        var count: Float = 0
 
-        var src = vImage_Buffer(
-            data: UnsafeMutableRawPointer(mutating: pixels),
-            height: vImagePixelCount(h),
-            width: vImagePixelCount(w),
-            rowBytes: w * MemoryLayout<Float>.stride
-        )
-        output.withUnsafeMutableBufferPointer { ptr in
-            var dst = vImage_Buffer(
-                data: ptr.baseAddress,
-                height: vImagePixelCount(h),
-                width: vImagePixelCount(w),
-                rowBytes: w * MemoryLayout<Float>.stride
-            )
-            var k = kernel
-            vImageConvolve_PlanarF(&src, &dst, nil, 0, 0, &k, 3, 3, 0, vImage_Flags(kvImageEdgeExtend))
+        // Sample every 3rd pixel for speed on 256x256 images
+        for y in stride(from: 1, to: h - 1, by: 3) {
+            for x in stride(from: 1, to: w - 1, by: 3) {
+                let c = pixels[y * w + x]
+                let t = pixels[(y - 1) * w + x]
+                let b = pixels[(y + 1) * w + x]
+                let l = pixels[y * w + (x - 1)]
+                let r = pixels[y * w + (x + 1)]
+                let lap = abs(4 * c - t - b - l - r)
+                sum   += lap
+                sumSq += lap * lap
+                count += 1
+            }
         }
 
-        // Variance of Laplacian response
-        var mean: Float = 0
-        var stddev: Float = 0
-        vDSP_normalize(output, 1, nil, 1, &mean, &stddev, vDSP_Length(output.count))
-        return min(1.0, stddev * stddev / 0.1)
+        guard count > 0 else { return 0 }
+        let mean     = sum / count
+        let variance = (sumSq / count) - (mean * mean)
+        return min(1.0, variance / 80.0)   // empirically normalised
     }
 
-    // MARK: - Exposure + Noise
+    // MARK: - Exposure (histogram via vDSP)
 
-    private func computeExposureAndNoise(_ cgImage: CGImage) -> (exposure: Float, noise: Float) {
-        guard let pixels = grayPixels(cgImage) else { return (0.5, 0) }
+    private func computeExposure(_ cgImage: CGImage) -> Float {
+        guard let pixels = grayFloatPixels(cgImage) else { return 0.5 }
+        let total = Float(pixels.count)
+        guard total > 0 else { return 0.5 }
 
-        // Histogram
-        var histogram = [vImagePixelCount](repeating: 0, count: 256)
-        var src = vImage_Buffer(
-            data: UnsafeMutableRawPointer(mutating: pixels),
-            height: vImagePixelCount(cgImage.height),
-            width: vImagePixelCount(cgImage.width),
-            rowBytes: cgImage.width * MemoryLayout<Float>.stride
-        )
-
-        // Convert Float to UInt8 for histogram
-        var uint8Pixels = pixels.map { UInt8(max(0, min(255, $0 * 255))) }
-        uint8Pixels.withUnsafeMutableBufferPointer { ptr in
-            var buf = vImage_Buffer(data: ptr.baseAddress,
-                                    height: vImagePixelCount(cgImage.height),
-                                    width: vImagePixelCount(cgImage.width),
-                                    rowBytes: cgImage.width)
-            vImageHistogramCalculation_Planar8(&buf, &histogram, vImage_Flags(kvImageNoFlags))
+        // Fraction of pixels that are very dark or very bright
+        var darkCount: Float  = 0
+        var brightCount: Float = 0
+        for p in pixels {
+            if p < 0.12 { darkCount  += 1 }
+            if p > 0.90 { brightCount += 1 }
         }
-
-        let totalPixels = Float(cgImage.width * cgImage.height)
-        let darkFraction  = Float(histogram[0..<30].reduce(0, +)) / totalPixels
-        let brightFraction = Float(histogram[230...].reduce(0, +)) / totalPixels
-
-        // Good exposure: minimal clipping in shadows or highlights
-        let exposureScore = 1.0 - min(1.0, (darkFraction * 2 + brightFraction * 2))
-
-        // Noise: high-frequency energy in uniform (low-variance) regions
-        let noiseScore: Float = 0  // simplified — full noise model requires patch analysis
-
-        return (max(0, exposureScore), noiseScore)
+        let darkFrac   = darkCount / total
+        let brightFrac = brightCount / total
+        return max(0, 1.0 - min(1.0, darkFrac * 2 + brightFrac * 2))
     }
 
-    // MARK: - Pixel Helpers
+    // MARK: - Gray pixel extraction (32-bit float, values 0-1)
 
-    private func grayPixels(_ cgImage: CGImage) -> [Float]? {
+    private func grayFloatPixels(_ cgImage: CGImage) -> [Float]? {
         let w = cgImage.width
         let h = cgImage.height
-        var floatPixels = [Float](repeating: 0, count: w * h)
+        var pixels = [Float](repeating: 0, count: w * h)
 
         guard let ctx = CGContext(
-            data: &floatPixels,
+            data: &pixels,
             width: w, height: h,
             bitsPerComponent: 32,
-            bytesPerRow: w * 4,
+            bytesPerRow: w * MemoryLayout<Float>.stride,
             space: CGColorSpaceCreateDeviceGray(),
             bitmapInfo: CGBitmapInfo.floatComponents.rawValue | CGImageAlphaInfo.none.rawValue
         ) else { return nil }
 
         ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return floatPixels
+        return pixels
     }
+
+    // MARK: - Image loading
 
     private func loadSample(asset: PHAsset) async -> UIImage? {
         await withCheckedContinuation { continuation in
@@ -140,14 +124,18 @@ actor QualityAnalyzer {
             options.deliveryMode = .fastFormat
             options.resizeMode = .fast
             options.isSynchronous = false
-            options.isNetworkAccessAllowed = false   // quality analysis from local data only
+            options.isNetworkAccessAllowed = false
 
+            var resumed = false
             PHImageManager.default().requestImage(
                 for: asset, targetSize: sampleSize,
                 contentMode: .aspectFit, options: options
             ) { image, info in
                 let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !degraded { continuation.resume(returning: image) }
+                if !degraded && !resumed {
+                    resumed = true
+                    continuation.resume(returning: image)
+                }
             }
         }
     }

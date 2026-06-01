@@ -40,7 +40,6 @@ struct ScanProgressView: View {
                     Text(scanEngine.scanState.phase.rawValue)
                         .font(Theme.Typography.title)
                         .foregroundColor(Theme.Colors.textPrimary)
-                        .contentTransition(.numericText())
                         .animation(.easeInOut, value: scanEngine.scanState.phase)
 
                     if scanEngine.scanState.totalCount > 0 {

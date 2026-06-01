@@ -79,7 +79,7 @@ struct DashboardView: View {
             StorageRingView(
                 usedGB: deviceStorage.used,
                 totalGB: deviceStorage.total,
-                savingsGB: scanEngine.result.map { $0.totalSavingsGB } ?? 0,
+                savingsGB: scanEngine.result?.totalSavingsGB ?? 0,
                 animated: true
             )
 

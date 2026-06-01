@@ -17,6 +17,7 @@ settings:
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGNING_ALLOWED: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
 
 targets:
   DeepClean:
